@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.15</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 btTool. All rights reserved.</string>
+	<!-- 纯代码工程：不要配置 NSMainNibFile / NSMainStoryboardFile，否则启动时会去找不存在的 nib -->
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+
+	<!-- 🔴 关键点 1：不在 Dock 显示图标（纯菜单栏常驻）。
+	     第四阶段需要「动态切换回 regular（显示 Dock 图标 + 主菜单）」；
+	     如果这里写死 LSUIElement=1，进程会被永久钉死为 UIElement，
+	     setActivationPolicy(.regular) 会被忽略。
+	     因此改为在 Sources/Application/main.swift 里第一时间调用
+	     NSApp.setActivationPolicy(.accessory)：默认效果一致，但保留了切换能力。 -->
+	<!-- <key>LSUIElement</key><true/> -->
+
+	<!-- 🔴 关键点 2：辅助功能（Accessibility）权限申请时展示给用户的说明文案 -->
+	<key>NSAccessibilityUsageDescription</key>
+	<string>btTool 需要“辅助功能”权限，才能识别当前前台应用的窗口标题，并在后台向 Touch Bar 注入自定义控件。</string>
+	<!-- 发送 AppleEvent / 模拟按键时会用到 -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>btTool 需要通过 AppleEvent 控制其他应用（例如唤起计算器、控制 Safari 前进后退）。</string>
+	<!-- macOS 10.15+ 的“输入监控”权限说明（模拟按键需要） -->
+	<key>NSInputMonitoringUsageDescription</key>
+	<string>btTool 需要“输入监控”权限，才能向系统投递模拟按键事件。</string>
+
+	<!-- 🔴 关键点 3：通知相关（第五阶段加固，详见 README 第八节）
+	     NSUserNotificationAlertStyle：Legacy NSUserNotification 的样式键，
+	     对 UNUserNotificationCenter 不起决定作用，但保留它是必要线索且无副作用。
+	     真正决定通知中心是否接受本应用的三件事：
+	       ① CFBundleIdentifier 存在且稳定（本工程为 com.bttool.app，由 Makefile 注入）；
+	       ② 必须通过 LaunchServices 启动（`open btTool.app`），直接跑 Mach-O 必被拒；
+	       ③ 代码签名有效 —— ad-hoc（`--sign -`）在部分系统版本上会被通知中心拒绝，
+	          此时 Notifier 会自动降级，把「标题 + 正文」完整写进 /tmp/btTool.log。 -->
+	<key>NSUserNotificationAlertStyle</key>
+	<string>alert</string>
+	<!-- 禁止多实例：避免重复注册全局热键 / 重复添加菜单栏图标 -->
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
+
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+</dict>
+</plist>

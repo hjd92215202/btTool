@@ -1,0 +1,10 @@
+{
+  // 你的其他现有配置项（例如字体大小、主题等）
+  "editor.fontSize": 14,
+  "workbench.colorTheme": "IDE Night",
+
+  // 指定 .md 文件的默认打开插件（注意：上一行末尾必须加逗号）
+  "workbench.editorAssociations": {
+    "*.md": "markdown-editor.customEditor"
+  }
+}
