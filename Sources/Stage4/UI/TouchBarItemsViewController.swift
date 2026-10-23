@@ -151,6 +151,10 @@ final class TouchBarItemsViewController: NSViewController, NSTableViewDataSource
         // 选中刚加的最后一项（store 的 add 会发通知触发 reload，这里补一次选中即可）
         if let last = RuleStore.shared.items(in: scope).last {
             selectedItemID = last.identifier.rawValue
+            // 必须同步**表格的选中行**：只换编辑器不换行高亮的话，列表还停在旧按钮上，
+            // 而编辑器已经在编辑新按钮 —— 用户看到的就是「两边不一致」。
+            tableView.selectRowIndexes(IndexSet(integer: RuleStore.shared.items(in: scope).count - 1),
+                                       byExtendingSelection: false)
             editorViewController.edit(scope: scope, itemID: last.identifier.rawValue)
         }
     }

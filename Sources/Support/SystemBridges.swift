@@ -165,7 +165,9 @@ enum Notifier {
     /// 降级出口：把本来该弹窗展示的内容原样写进日志，保证测试时**数据不丢失**
     private static func fallback(title: String, body: String, reason: String) {
         Log.error("⚠️ 通知未能展示：\(reason)")
-        Log.info("[通知降级] 标题：\(title) ｜ 正文：\(body)")
+        // 正文可能含隐私，降级写文件时也只留摘要
+        Log.sensitive("未展示的通知标题", title)
+        Log.sensitive("未展示的通知正文", body)
     }
 }
 
@@ -194,6 +196,8 @@ enum ShellRunner {
             Log.error("[Shell] 命令为空，已跳过")
             return
         }
+        // 🔒 P1：这条命令如果是第一次见，先弹窗问过用户才执行（见 CommandApproval）
+        guard CommandApproval.approveIfNeeded(.shell, trimmed) else { return }
         queue.async { execute(trimmed) }
     }
 
@@ -212,7 +216,8 @@ enum ShellRunner {
         do {
             try task.run()
         } catch {
-            Log.error("[Shell] 启动失败：\(error.localizedDescription) ｜ 命令：\(command)")
+            Log.error("[Shell] 启动失败：\(error.localizedDescription)")
+            Log.sensitive("Shell 命令", command)
             return
         }
 
@@ -240,19 +245,23 @@ enum ShellRunner {
 
         // 超时保护：脚本挂死时不要让后台线程永久卡住
         if group.wait(timeout: .now() + 30) == .timedOut {
-            Log.error("[Shell] 读取输出超时（30s），命令可能仍在后台运行：\(command)")
+            Log.error("[Shell] 读取输出超时（30s）：不再等待，命令留在后台自己跑完")
+            Log.sensitive("Shell 命令", command)
+            // 这里直接返回，绝不再 task.waitUntilExit() —— 否则"超时保护"等于没写：
+            // 后台线程还是会一直陪着这条命令耗到它自己结束。
+            return
         }
         task.waitUntilExit()
         stdoutPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
 
-        Log.info("[Shell] 退出码=\(task.terminationStatus) ｜ 命令：\(command)")
+        Log.info("[Shell] 退出码=\(task.terminationStatus)")
+        Log.sensitive("Shell 命令", command)
         let stdoutText = stdoutBuffer.string
         let stderrText = stderrBuffer.string
-        if !stdoutText.isEmpty { Log.info("[Shell stdout] \(stdoutText)") }
-        if task.terminationStatus != 0 || !stderrText.isEmpty {
-            Log.error("[Shell stderr] \(stderrText.isEmpty ? "(空)" : stderrText)")
-        }
+        // 命令的输出里可能含隐私内容（路径、账号、token），一律走脱敏通道
+        if !stdoutText.isEmpty { Log.sensitive("Shell stdout", stdoutText) }
+        if !stderrText.isEmpty { Log.sensitive("Shell stderr", stderrText) }
     }
 }
 
@@ -272,10 +281,13 @@ enum AppleScriptRunner {
             Log.error("[AppleScript] 脚本为空，已跳过")
             return
         }
+        // 🔒 P1：同上，首次见到的脚本必须先经用户确认
+        guard CommandApproval.approveIfNeeded(.appleScript, trimmed) else { return }
         // NSAppleScript 的编译+执行可能耗时数百毫秒，绝不能放在主线程
         queue.async {
             guard let script = NSAppleScript(source: trimmed) else {
-                Log.error("[AppleScript] 无法创建脚本对象：\(trimmed.prefix(80))")
+                Log.error("[AppleScript] 无法创建脚本对象")
+                Log.sensitive("AppleScript 源码", trimmed)
                 return
             }
 

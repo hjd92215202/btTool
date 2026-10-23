@@ -1,5 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
 
 /// 动作编辑器（标题 / 正文 / 按键 / 修饰键 / 脚本）。
 ///
@@ -25,22 +24,18 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let kindPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let mainField = NSTextField()
     private let detailField = NSTextField()
-    private let keyPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let scriptTextView = NSTextView()
 
-    private let commandCheckbox = NSButton(checkboxWithTitle: "⌘", target: nil, action: nil)
-    private let optionCheckbox = NSButton(checkboxWithTitle: "⌥", target: nil, action: nil)
-    private let controlCheckbox = NSButton(checkboxWithTitle: "⌃", target: nil, action: nil)
-    private let shiftCheckbox = NSButton(checkboxWithTitle: "⇧", target: nil, action: nil)
+    /// 模拟按键的录制框（替代原来的按键下拉框 + 4 个修饰键复选框）
+    private let shortcutRecorder = ShortcutRecorderField()
 
     private let kindRow: FormRow
     private let mainRow: FormRow
     private let detailRow: FormRow
     private let keyRow: FormRow
-    private let flagsRow: FormRow
     private let scriptRow: FormRow
 
-    private var orderedRows: [FormRow] { [kindRow, mainRow, detailRow, scriptRow, keyRow, flagsRow] }
+    private var orderedRows: [FormRow] { [kindRow, mainRow, detailRow, scriptRow, keyRow] }
 
     private let formLayout = VerticalFormLayout()
     private var pendingFlush: DispatchWorkItem?
@@ -61,16 +56,9 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         kindRow = FormRow(labelText: "触发动作", control: kindPopup)
         mainRow = FormRow(labelText: "参数", control: mainField)
         detailRow = FormRow(labelText: "附加", control: detailField)
-        keyRow = FormRow(labelText: "按键", control: keyPopup)
+        keyRow = FormRow(labelText: "按键组合", control: shortcutRecorder)
         scriptRow = FormRow(labelText: "脚本", control: scriptScrollView,
                             controlHeight: Metrics.scriptHeight)
-
-        let checkboxes = NSStackView(views: [commandCheckbox, optionCheckbox,
-                                             controlCheckbox, shiftCheckbox])
-        checkboxes.orientation = .horizontal
-        checkboxes.spacing = 12
-        checkboxes.alignment = .centerY
-        flagsRow = FormRow(labelText: "修饰键", control: checkboxes)
 
         super.init(frame: .zero)
 
@@ -87,9 +75,14 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         kindPopup.target = self
         kindPopup.action = #selector(kindDidChange(_:))
 
-        keyPopup.addItems(withTitles: KeyCatalog.options.map(\.name))
-        keyPopup.target = self
-        keyPopup.action = #selector(keyDidChange(_:))
+        // 模拟按键允许无修饰键（例如只投递一个 F5），由录制器自行决定
+        shortcutRecorder.requiresModifier = false
+        shortcutRecorder.onCapture = { [weak self] combo in
+            guard let self else { return }
+            self.dto.keyCode = combo.keyCode
+            self.dto.modifierRawValue = combo.modifierRawValue
+            self.commitNow()
+        }
 
         for field in [mainField, detailField] {
             field.bezelStyle = .roundedBezel
@@ -103,12 +96,6 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         // 内边距：拒绝视觉死角（文字贴边）
         scriptTextView.textContainerInset = NSSize(width: 6, height: 6)
         scriptTextView.autoresizingMask = [.width]
-
-        for checkbox in [commandCheckbox, optionCheckbox, controlCheckbox, shiftCheckbox] {
-            checkbox.target = self
-            checkbox.action = #selector(modifierDidChange(_:))
-            checkbox.setContentHuggingPriority(.required, for: .horizontal)
-        }
 
         // —— 布局：显式等式链（见 VerticalFormLayout 注释）——
         // 每行宽度必然撑满、行高为常量、容器高度 = 各行之和，几何完全可推导。
@@ -129,13 +116,9 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         mainField.stringValue = dto.text ?? ""
         detailField.stringValue = dto.detail ?? ""
         scriptTextView.string = dto.text ?? ""
-        keyPopup.selectItem(at: KeyCatalog.index(of: dto.keyCode ?? CGKeyCode(kVK_Space)))
-
-        let raw = dto.modifierRawValue ?? CGEventFlags.maskCommand.rawValue
-        commandCheckbox.state = raw & CGEventFlags.maskCommand.rawValue != 0 ? .on : .off
-        optionCheckbox.state = raw & CGEventFlags.maskAlternate.rawValue != 0 ? .on : .off
-        controlCheckbox.state = raw & CGEventFlags.maskControl.rawValue != 0 ? .on : .off
-        shiftCheckbox.state = raw & CGEventFlags.maskShift.rawValue != 0 ? .on : .off
+        // nil 表示「还没录过」，此时显示占位文案而不是伪造一个 Space
+        shortcutRecorder.configure(keyCode: dto.keyCode,
+                                   modifierRawValue: dto.modifierRawValue ?? 0)
 
         updatePresentation()
     }
@@ -154,6 +137,11 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         }
         scriptTextView.isEditable = enabled
         scriptTextView.isSelectable = enabled
+
+        // 置灰时如果录制框正握着第一响应者，必须主动交出去，否则它仍会吞掉按键
+        if !enabled, shortcutRecorder.window?.firstResponder === shortcutRecorder {
+            shortcutRecorder.window?.makeFirstResponder(nil)
+        }
     }
 
     private func updatePresentation() {
@@ -161,10 +149,9 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         let usesScriptEditor = kind == .shell || kind == .appleScript
 
         kindRow.isHidden = false
-        mainRow.isHidden = usesScriptEditor || kind == .group
+        mainRow.isHidden = usesScriptEditor || kind == .group || kind == .openSettingsWindow
         detailRow.isHidden = !(kind == .notification || kind == .launch)
         keyRow.isHidden = kind != .syntheticKey
-        flagsRow.isHidden = kind != .syntheticKey
         scriptRow.isHidden = !usesScriptEditor
 
         switch kind {
@@ -179,9 +166,9 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         case .shell: scriptRow.label.stringValue = "Shell 命令"
         case .appleScript: scriptRow.label.stringValue = "AppleScript"
         case .syntheticKey:
-            keyRow.label.stringValue = "按键"
-            flagsRow.label.stringValue = "修饰键"
+            keyRow.label.stringValue = "按键组合"
         case .group: break
+        case .openSettingsWindow: break
         }
 
         // 行集合变了 → 重建约束链（隐藏行自动被跳过，高度随之精确收缩）
@@ -198,22 +185,6 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         guard newKind != dto.kind else { return }
         dto = dto.converted(to: newKind)
         configure(dto)      // 按新类型回填合理默认值
-        commitNow()
-    }
-
-    @objc private func keyDidChange(_ sender: NSPopUpButton) {
-        guard KeyCatalog.options.indices.contains(sender.indexOfSelectedItem) else { return }
-        dto.keyCode = KeyCatalog.options[sender.indexOfSelectedItem].keyCode
-        commitNow()
-    }
-
-    @objc private func modifierDidChange(_ sender: NSButton) {
-        var raw: UInt64 = 0
-        if commandCheckbox.state == .on { raw |= CGEventFlags.maskCommand.rawValue }
-        if optionCheckbox.state == .on { raw |= CGEventFlags.maskAlternate.rawValue }
-        if controlCheckbox.state == .on { raw |= CGEventFlags.maskControl.rawValue }
-        if shiftCheckbox.state == .on { raw |= CGEventFlags.maskShift.rawValue }
-        dto.modifierRawValue = raw
         commitNow()
     }
 

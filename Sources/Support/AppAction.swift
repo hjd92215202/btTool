@@ -20,6 +20,8 @@ indirect enum AppAction {
     case shell(String)
     /// 后台异步执行一段 AppleScript 源码
     case appleScript(String)
+    /// 打开配置主窗口（无匹配规则时的占位长栏用它）
+    case openSettingsWindow
     /// 组合动作
     case group([AppAction])
 
@@ -43,6 +45,8 @@ indirect enum AppAction {
             ShellRunner.run(command)
         case .appleScript(let source):
             AppleScriptRunner.run(source)
+        case .openSettingsWindow:
+            AppCoordinator.shared.showSettingsWindow()
         case .group(let actions):
             actions.forEach { $0.run() }
         }

@@ -15,13 +15,8 @@ final class ShortcutsViewController: NSViewController, NSTableViewDataSource, NS
     private let emptyHint = NSTextField(labelWithString: "还没有任何快捷键，点击右上角 + 添加一条")
     private var storeObserver: NSObjectProtocol?
 
-    // 编辑器控件
-    private let previewLabel = NSTextField(labelWithString: "—")
-    private let keyPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let commandCheckbox = NSButton(checkboxWithTitle: "⌘", target: nil, action: nil)
-    private let optionCheckbox = NSButton(checkboxWithTitle: "⌥", target: nil, action: nil)
-    private let controlCheckbox = NSButton(checkboxWithTitle: "⌃", target: nil, action: nil)
-    private let shiftCheckbox = NSButton(checkboxWithTitle: "⇧", target: nil, action: nil)
+    // 编辑器控件：录制框一个控件替代「下拉框 + 4 个复选框 + 预览标签」
+    private let recorder = ShortcutRecorderField()
     private let actionEditor = ActionEditorView()
 
     private var editorRows: [FormRow] = []
@@ -119,34 +114,17 @@ final class ShortcutsViewController: NSViewController, NSTableViewDataSource, NS
     }
 
     private func buildEditorContent() -> NSView {
-        keyPopup.addItems(withTitles: KeyCatalog.options.map(\.name))
-        keyPopup.target = self
-        keyPopup.action = #selector(keyDidChange(_:))
-        keyPopup.widthAnchor.constraint(equalToConstant: 160).isActive = true
-
-        let modifiers = NSStackView(views: [commandCheckbox, optionCheckbox, controlCheckbox, shiftCheckbox])
-        modifiers.orientation = .horizontal
-        modifiers.alignment = .centerY
-        modifiers.spacing = 12
-        for checkbox in [commandCheckbox, optionCheckbox, controlCheckbox, shiftCheckbox] {
-            checkbox.target = self
-            checkbox.action = #selector(modifierDidChange(_:))
-            checkbox.setContentHuggingPriority(.required, for: .horizontal)
+        // 全局 / 应用级快捷键没有修饰键会被运行时拒绝注册，所以录制时就挡住
+        recorder.requiresModifier = true
+        recorder.onCapture = { [weak self] combo in
+            guard let self, self.selectedShortcutID != nil, let keyCode = combo.keyCode else { return }
+            self.draftKeyCode = keyCode
+            self.draftModifiers = combo.modifierRawValue
+            self.commit()
         }
 
-        let comboControls = NSStackView(views: [keyPopup, modifiers])
-        comboControls.orientation = .horizontal
-        comboControls.alignment = .centerY
-        comboControls.spacing = Metrics.labelGap
-        comboControls.setHuggingPriority(.required, for: .horizontal)
-
-        previewLabel.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .semibold)
-        previewLabel.textColor = .controlAccentColor
-
-        let previewRow = FormRow(labelText: "快捷组合", control: previewLabel)
-        let comboRow = FormRow(labelText: "组合键", control: comboControls)
-
-        editorRows = [previewRow, comboRow]
+        let comboRow = FormRow(labelText: "组合键", control: recorder)
+        editorRows = [comboRow]
 
         // flipped 容器作为 NSScrollView 的 documentView（非 flipped 会被钉在裁剪区左下角）
         let documentView = FlippedView()
@@ -190,35 +168,25 @@ final class ShortcutsViewController: NSViewController, NSTableViewDataSource, NS
               let shortcut = RuleStore.shared.shortcuts(in: scope).first(where: { $0.id == id }) else {
             draftKeyCode = UInt16(kVK_Space)
             draftModifiers = CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue
-            syncComboControls()
+            recorder.configure(.empty)
             actionEditor.configure(ActionDTO(kind: .log, text: "Hello btTool"))
             setEditorEnabled(false)
             return
         }
         draftKeyCode = shortcut.keyCode
         draftModifiers = shortcut.modifierRawValue
-        syncComboControls()
+        recorder.configure(keyCode: shortcut.keyCode, modifierRawValue: shortcut.modifierRawValue)
         actionEditor.configure(shortcut.action)
         setEditorEnabled(true)
     }
 
     private func setEditorEnabled(_ enabled: Bool) {
         editorRows.forEach { $0.label.textColor = enabled ? .labelColor : .disabledControlTextColor }
-        keyPopup.isEnabled = enabled
-        actionEditor.setEditable(enabled)
-        for checkbox in [commandCheckbox, optionCheckbox, controlCheckbox, shiftCheckbox] {
-            checkbox.isEnabled = enabled
+        recorder.isEnabled = enabled
+        if !enabled, recorder.window?.firstResponder === recorder {
+            recorder.window?.makeFirstResponder(nil)
         }
-    }
-
-    private func syncComboControls() {
-        keyPopup.selectItem(at: KeyCatalog.index(of: draftKeyCode))
-        commandCheckbox.state = draftModifiers & CGEventFlags.maskCommand.rawValue != 0 ? .on : .off
-        optionCheckbox.state = draftModifiers & CGEventFlags.maskAlternate.rawValue != 0 ? .on : .off
-        controlCheckbox.state = draftModifiers & CGEventFlags.maskControl.rawValue != 0 ? .on : .off
-        shiftCheckbox.state = draftModifiers & CGEventFlags.maskShift.rawValue != 0 ? .on : .off
-        previewLabel.stringValue = ModifierFlags.glyphs(cgRawValue: draftModifiers)
-            + KeyNames.name(for: draftKeyCode)
+        actionEditor.setEditable(enabled)
     }
 
     // MARK: - 冲突判定
@@ -254,30 +222,6 @@ final class ShortcutsViewController: NSViewController, NSTableViewDataSource, NS
         guard let scope, let selectedShortcutID else { return }
         RuleStore.shared.removeShortcut(from: scope, shortcutID: selectedShortcutID)
         self.selectedShortcutID = nil
-    }
-
-    @objc private func keyDidChange(_ sender: NSPopUpButton) {
-        guard selectedShortcutID != nil else { return }
-        guard KeyCatalog.options.indices.contains(sender.indexOfSelectedItem) else { return }
-        draftKeyCode = KeyCatalog.options[sender.indexOfSelectedItem].keyCode
-        syncComboControls()
-        commit()
-    }
-
-    @objc private func modifierDidChange(_ sender: NSButton) {
-        guard selectedShortcutID != nil else { return }
-        draftModifiers = composeModifiers()
-        syncComboControls()
-        commit()
-    }
-
-    private func composeModifiers() -> UInt64 {
-        var raw: UInt64 = 0
-        if commandCheckbox.state == .on { raw |= CGEventFlags.maskCommand.rawValue }
-        if optionCheckbox.state == .on { raw |= CGEventFlags.maskAlternate.rawValue }
-        if controlCheckbox.state == .on { raw |= CGEventFlags.maskControl.rawValue }
-        if shiftCheckbox.state == .on { raw |= CGEventFlags.maskShift.rawValue }
-        return raw
     }
 
     /// 写回 RuleStore（无论改的是组合键还是动作，都收敛到这里）

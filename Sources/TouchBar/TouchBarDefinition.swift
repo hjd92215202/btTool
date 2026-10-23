@@ -36,6 +36,18 @@ struct TouchBarDefinition {
     }
 
     mutating func appendItem(_ item: TouchBarItemModel) { items.append(item) }
+
+    /// 没有匹配规则时展示的**占位长栏**。
+    ///
+    /// 🟢 P2：以前无匹配规则时直接 `collapse` 收起 —— 表现是「点开托盘 → 切到没规则的应用 →
+    /// 又自己收起来了」，看起来就像工具坏了。现在改成留一条占位栏：
+    /// 至少让用户看见 btTool 还在，并且能一键跳到配置界面去补规则。
+    static func placeholder(forAppNamed name: String) -> TouchBarDefinition {
+        TouchBarDefinition(identifier: "btTool.touchBar.placeholder",
+                           items: [TouchBarItemModel(identifier: "btTool.placeholder.openSettings",
+                                                     title: "⚙ 为「\(name)」配置规则…",
+                                                     action: .openSettingsWindow)])
+    }
 }
 
 /// 统一呈现协议：让「窗口前台呈现」和「后台系统模态注入」拥有完全一样的调用接口，

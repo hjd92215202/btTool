@@ -40,6 +40,7 @@ struct ActionDTO: Codable, Equatable {
         case shell
         case appleScript
         case group
+        case openSettingsWindow
 
         var displayName: String {
             switch self {
@@ -51,6 +52,7 @@ struct ActionDTO: Codable, Equatable {
             case .shell: return "执行 Shell"
             case .appleScript: return "执行 AppleScript"
             case .group: return "组合动作"
+            case .openSettingsWindow: return "打开配置窗口"
             }
         }
     }
@@ -88,6 +90,8 @@ struct ActionDTO: Codable, Equatable {
             return .appleScript(text ?? "")
         case .group:
             return .group((children ?? []).map(\.action))
+        case .openSettingsWindow:
+            return .openSettingsWindow
         }
     }
 
@@ -111,6 +115,8 @@ struct ActionDTO: Codable, Equatable {
             self.init(kind: .appleScript, text: source)
         case .group(let actions):
             self.init(kind: .group, children: actions.map(ActionDTO.init))
+        case .openSettingsWindow:
+            self.init(kind: .openSettingsWindow)
         }
     }
 
@@ -142,6 +148,7 @@ struct ActionDTO: Codable, Equatable {
         case .shell: dto.text = text ?? "pmset displaysleepnow"
         case .appleScript: dto.text = text ?? "tell application \"Spotify\" to playpause"
         case .group: dto.children = children ?? [ActionDTO(kind: .log, text: "Hello btTool")]
+        case .openSettingsWindow: break
         }
         return dto
     }
@@ -158,6 +165,7 @@ struct ActionDTO: Codable, Equatable {
         case .shell: return "Shell：\(truncated(text))"
         case .appleScript: return "AppleScript：\(truncated(text))"
         case .group: return "组合（\(children?.count ?? 0) 步）"
+        case .openSettingsWindow: return "打开 btTool 配置窗口"
         }
     }
 
@@ -327,7 +335,10 @@ struct TouchBarRuleDTO: Codable {
     var shortcuts: [KeyboardShortcutDTO] = []
 
     init(rule: TouchBarRule) {
-        bundleIdentifiers = Array(rule.bundleIdentifiers)
+        // 🟢 P2：Set 的遍历顺序取决于内部哈希布局，直接 Array(...) 会让每次保存
+        // 都在"随机重排" —— 规则文件的 diff 全是这种无意义噪声。排序后每次输出一致。
+        // （保持 Set 用于匹配是 O(1)，没必要为了排序把类型改成数组）
+        bundleIdentifiers = rule.bundleIdentifiers.sorted()
         definition = TouchBarDefinitionDTO(definition: rule.definition)
         shortcuts = rule.shortcuts
     }

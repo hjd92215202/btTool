@@ -80,6 +80,21 @@ private enum SystemModalTouchBarAPI {
         return String(cString: raw)
     }
 
+    /// Control Strip 常驻项（右侧托盘图标）的注册 / 注销
+    static let addTrayItemSelector: Selector? = {
+        let selector = NSSelectorFromString("addSystemTrayItem:")
+        guard ObjCRuntime.classMethodExists(on: NSTouchBarItem.self, selector) else { return nil }
+        // 签名必须是 v@:@（void + 一个对象参数），否则 arm64 上直接崩
+        guard let method = class_getClassMethod(NSTouchBarItem.self, selector),
+              let raw = method_getTypeEncoding(method) else { return nil }
+        return String(cString: raw).filter { !$0.isNumber } == "v@:@" ? selector : nil
+    }()
+
+    static let removeTrayItemSelector: Selector? = {
+        ["removeSystemTrayItem:"].map(NSSelectorFromString)
+            .first { ObjCRuntime.classMethodExists(on: NSTouchBarItem.self, $0) }
+    }()
+
     static let dismissSelector: Selector? = {
         ["dismissSystemModalTouchBar:", "dismissSystemModalFunctionBar:"]
             .map(NSSelectorFromString)
@@ -99,16 +114,36 @@ private enum SystemModalTouchBarAPI {
 ///
 /// 它和 `TouchBarHostWindowController`（第二阶段）实现同一个协议 `TouchBarPresenting`，
 /// 因此 AppCoordinator 可以用同一行代码 `presenter.present(definition)` 驱动两种完全不同的机制。
-final class SystemModalTouchBarPresenter: TouchBarPresenting {
-    /// Control Strip 上我们那个入口项的标识。
-    /// 🔴 必须固定！否则每次切换前台应用都会在系统里新增一个条目，用户会发现 Control Strip 越来越长。
-    static let systemTrayItemIdentifier = "btTool.controlStrip"
+final class SystemModalTouchBarPresenter: NSObject, TouchBarPresenting {
+    /// Control Strip 常驻托盘项的标识。
+    /// 🔴 必须固定且全局唯一：它是托盘图标与左侧模态栏的“绑定键”，
+    /// 反复注册同一个 identifier 不会在 Control Strip 里堆积，也不会让图标闪一下再消失。
+    static let trayItemIdentifier = "btTool.controlStrip.trayItem"
 
     /// 强引用 host —— `NSTouchBar.delegate` 是 weak，一旦 host 被释放，
     /// 系统会拿不到任何 item（表现为“注入了但整条栏是空的”）。这是最常见的坑。
     private var host: TouchBarHost?
 
-    var isPresenting: Bool { host != nil }
+    /// Control Strip 托盘项。必须强引用：`addSystemTrayItem:` 不 retain 外部对象，
+    /// 一旦释放，右侧图标会静默消失（且系统里残留一个僵尸标识）。
+    private var trayItem: NSCustomTouchBarItem?
+
+    /// 硬件上**真的**正在显示我们这条栏（`NSTouchBar.isVisible`）。
+    ///
+    /// 用户点叉时系统只是把栏收走、不会通知我们，所以这里必须读可见性而不是 `host != nil`；
+    /// 但**不再**用它做“自动重燃”判据 —— 新架构由用户点托盘图标决定展开/收回。
+    var isPresenting: Bool { host?.touchBar.isVisible ?? false }
+
+    /// 用户点了右侧托盘图标（由 AppCoordinator 决定展开还是收回）
+    var onTrayItemClicked: (() -> Void)?
+
+    /// 系统把展开的栏收走了（点叉 / 被其它系统模态抢占）。
+    /// KVO 监听 `touchBar.isVisible`，实测同一毫秒回调；这里只用于同步“已收起”状态，
+    /// 绝不再自动拉回 —— 那正是上一版 0.6s 轮询的问题所在。
+    var onSystemDismissed: (() -> Void)?
+
+    /// `isVisible` 的 KVO 观察者；每次换 host 必须重建，dismiss 时必须失效。
+    private var visibilityObservation: NSKeyValueObservation?
 
     /// 当前已注入的那条定义的标识（用于去重，避免切换应用时 Touch Bar 无谓重建/闪烁）
     var currentDefinitionIdentifier: NSTouchBar.CustomizationIdentifier? {
@@ -128,13 +163,20 @@ final class SystemModalTouchBarPresenter: TouchBarPresenting {
             return
         }
 
+        // 🟢 P2：内容没变就别重建。present 必然是"先销毁再重新注入"，
+        // 在切窗口 / 切标签页这类高频场景里会表现为长栏连续闪动。
+        if isPresenting, currentDefinitionIdentifier == definition.customizationIdentifier {
+            Log.debug("长栏内容未变，跳过重建：\(definition.customizationIdentifier)", log: Log.touchBar)
+            return
+        }
+
         // 先销毁上一条，避免叠加
         dismiss()
 
         let host = TouchBarHost(definition: definition)
 
-        // 隐藏系统模态栏左侧的关闭按钮，让注入结果更像原生 Control Strip
-        DFRFoundationBridge.setSystemModalCloseBoxHidden(true)
+        // 尝试关掉系统模态栏左侧的「×」（按函数名字面语义：false = 不显示）
+        DFRFoundationBridge.setShowsSystemModalCloseBoxWhenFrontMost(false)
 
         let invoked = invokePresent(selector: api.selector,
                                     hasPlacement: api.hasPlacement,
@@ -143,21 +185,23 @@ final class SystemModalTouchBarPresenter: TouchBarPresenting {
         // ⚠️ 即便调用失败也要决定是否持有：不持有则本轮注入没有意义（防止泄漏），
         //    但 log 必须如实标记失败，方便排查（不会造成"看起来成功其实没成功"）。
         guard invoked else {
-            DFRFoundationBridge.setSystemModalCloseBoxHidden(false)
+            DFRFoundationBridge.setShowsSystemModalCloseBoxWhenFrontMost(true)
             Log.error("调用私有 present 选择器失败（签名校验未通过），本次注入已放弃", log: Log.touchBar)
             return
         }
 
         self.host = host
+        observeVisibility(of: host.touchBar)
         Log.info("已向系统注入 Touch Bar：\(definition.customizationIdentifier)" +
                  "（items: \(definition.items.map(\.title))）", log: Log.touchBar)
-
-        if AppSettings.shared.experimentalControlStripItem {
-            tryRegisterControlStripItem()
-        }
     }
 
     func dismiss() {
+        // 先拆 KVO 再动手：dismiss 自身也会把 isVisible 打回 false，
+        // 若不先失效，会被误判成“系统收走了”，状态机来回抖。
+        visibilityObservation?.invalidate()
+        visibilityObservation = nil
+
         guard let host else { return }
         // 🔴 无论私有选择器是否可用，都必须清掉强引用 —— 否则 TouchBarHost/NSTouchBar 永久泄漏，
         //    而且下次 present 会因为 dismiss() 提前返回而叠加。
@@ -166,15 +210,204 @@ final class SystemModalTouchBarPresenter: TouchBarPresenting {
         let touchBar = host.touchBar
         if let selector = SystemModalTouchBarAPI.dismissSelector {
             ObjCRuntime.sendVoid(NSTouchBar.self, selector, touchBar)
-            DFRFoundationBridge.setSystemModalCloseBoxHidden(false)
+            DFRFoundationBridge.setShowsSystemModalCloseBoxWhenFrontMost(true)
             Log.info("已销毁注入的 Touch Bar", log: Log.touchBar)
         } else if let selector = SystemModalTouchBarAPI.minimizeSelector {
             ObjCRuntime.sendVoid(NSTouchBar.self, selector, touchBar)
-            DFRFoundationBridge.setSystemModalCloseBoxHidden(false)
+            DFRFoundationBridge.setShowsSystemModalCloseBoxWhenFrontMost(true)
             Log.info("已收起注入的 Touch Bar（minimize）", log: Log.touchBar)
         } else {
             Log.error("dismiss / minimize 选择器均不可用，仅释放本地引用" +
                       "（系统栏由 Touch Bar Server 自行回收，不会影响本进程稳定性）", log: Log.touchBar)
+        }
+    }
+
+    // MARK: - Control Strip 托盘（右侧常驻图标）
+
+    /// 是否支持托盘常驻（不同系统版本可能只提供 present，不提供 addSystemTrayItem）
+    static var canInstallTrayItem: Bool { SystemModalTouchBarAPI.addTrayItemSelector != nil }
+
+    var isTrayItemInstalled: Bool { trayItem != nil }
+
+    /// 把 "BT" 图标常驻到右侧 Control Strip。
+    ///
+    /// 和「系统模态栏」的区别：
+    /// - 系统模态栏（present）是**左侧长栏**，会占满整条 Touch Bar、并且用户点叉就能收走；
+    /// - 托盘项（addSystemTrayItem）是**右侧小图标**，由系统常驻管理，点叉也收不走。
+    ///
+    /// 两者的 identifier 保持同一个常量，系统才能把它们识别成“同一个 App 的入口与面板”。
+    ///
+    /// ## 两层私有 API 的分工（本轮补齐，2026-10-23 实测）
+    ///
+    /// 1. **AppKit 层** `+addSystemTrayItem:` —— 负责**创建** item（把 `NSTouchBarItem` 登记进去）；
+    /// 2. **DFR 层** `DFRElementSetControlStripPresenceForIdentifier(id, present)` ——
+    ///    负责向 Touch Bar Server **开关该项的存在性**（不创建 item，必须先有第 1 步）。
+    ///
+    /// 两者是串联关系：`addSystemTrayItem` 之后必须再 `presence = YES`，
+    /// 拆除时反过来先 `presence = NO` 再 `removeSystemTrayItem`。
+    ///
+    /// ⚠️ 仍然要如实说明（macOS 12.7.6 / ad-hoc）：图标**至今没有肉眼可见的证据**。
+    ///
+    /// 🟢 **已推翻的旧结论**：以前这里写的是「缺 `com.apple.private.controlstrip` 导致被拦截」。
+    ///    该结论**证据不足，已作废** —— 两个反证：
+    ///    ① MTMR（`Toxblh/MTMR`，`TouchBarController.swift:288-299`）用的是**完全相同**的两个调用
+    ///       和相同顺序，Info.plist 与 entitlements 里都没有该特权；
+    ///    ② "签了它之后 spawn failed" 只能说明**受限 entitlement 需要 provisioning profile**，
+    ///       推不出"托盘依赖它"。
+    ///    所以现在的原因标记为 **待验证**，并在 `diagnoseTrayRegistration()` 里列出
+    ///    已排除 / 未验证的变量清单。
+    func installTrayItem() {
+        guard let selector = SystemModalTouchBarAPI.addTrayItemSelector else {
+            Log.error("addSystemTrayItem: 选择器不存在 → Control Strip 托盘不可用。" +
+                      "请用菜单栏「【调试】强行展开左侧 Touch Bar」验证左侧长栏", log: Log.touchBar)
+            return
+        }
+        guard trayItem == nil else { return }   // 幂等：重复调用不会堆叠
+
+        DFRFoundationBridge.startupDiagnostics()
+
+        let item = NSCustomTouchBarItem(identifier: NSTouchBarItem.Identifier(Self.trayItemIdentifier))
+        item.customizationLabel = "btTool"
+
+        // ⬇︎ 对齐 MTMR 的权威写法：便捷构造器 + 模板图，**不指定 frame / 不覆盖 bezelStyle**
+        //   （MTMR: NSButton(image: #imageLiteral(resourceName:"StatusImage"), target:action:)）
+        let button = NSButton(image: Self.makeTrayIcon(),
+                              target: self,
+                              action: #selector(trayItemClicked(_:)))
+        button.toolTip = "btTool：展开 / 收回自定义 Touch Bar"
+        item.view = button
+
+        ObjCRuntime.sendVoid(NSTouchBarItem.self, selector, item)
+        trayItem = item
+        // DFR 层：向 Touch Bar Server 声明该项存在（必须先 addSystemTrayItem，否则无对象可开关）
+        DFRFoundationBridge.setControlStripPresence(identifier: Self.trayItemIdentifier, present: true)
+        Log.info("已发起 Control Strip 托盘注册：\(Self.trayItemIdentifier)" +
+                 "（AppKit + DFR 存在性开关都已调用，是否上屏需肉眼确认）", log: Log.touchBar)
+        diagnoseTrayRegistration()
+    }
+
+    /// 幂等地确保托盘存在 —— 供「应用被激活」等高频事件调用。
+    ///
+    /// - 已注册 → **只重申 DFR 存在性**，绝不重复 `addSystemTrayItem:`（重复注册会堆积 item）；
+    /// - 未注册 → 走完整的 `installTrayItem()`。
+    ///
+    /// 为什么要做成幂等：`NSApplication.didBecomeActiveNotification` 的触发频率不低
+    /// （点菜单栏、点托盘按钮、配置窗口…），不做去重就等于高频重注册。
+    func ensureTrayItemInstalled() {
+        guard trayItem != nil else {
+            Log.info("托盘未注册 → 按激活事件补注册", log: Log.touchBar)
+            installTrayItem()
+            return
+        }
+        DFRFoundationBridge.setControlStripPresence(identifier: Self.trayItemIdentifier, present: true)
+        Log.debug("托盘已存在 → 仅向 Touch Bar Server 重申存在性", log: Log.touchBar)
+    }
+
+    /// 托盘注册后的诊断。**只列事实与变量，不下"属预期行为"这类结论**。
+    ///
+    /// 旧版在这里断言「未持有 private.controlstrip → 不显示属预期行为，不是 bug」，
+    /// 那是循环论证，已作废（反证见本文件顶部）。
+    private func diagnoseTrayRegistration() {
+        Log.info("【P0·对照依据】MTMR(Toxblh/MTMR) TouchBarController.swift:288-299 用的是" +
+                 "「addSystemTrayItem: → DFRElementSetControlStripPresenceForIdentifier」" +
+                 "**完全相同**的序列，且不持有 com.apple.private.controlstrip。" +
+                 "→ 缺该特权**不能**解释图标不显示。", log: Log.touchBar)
+        Log.info("【P0·已对齐 MTMR 的项】调用顺序 / 主线程 / applicationDidFinishLaunching 之后 / " +
+                 "accessory 激活策略 / 模板图 + NSButton(image:...) 便捷构造", log: Log.touchBar)
+        Log.info("【P0·未验证的变量】① Info.plist LSUIElement 键（MTMR=1；本项目=无，靠运行时 " +
+                 "setActivationPolicy(.accessory)）；② Hardened Runtime（make build HARDENED=0 可 A/B）；" +
+                 "③ 系统设置→键盘→Touch Bar 呈现模式；④ TouchBarServer 缓存（sudo pkill TouchBarServer）",
+                 log: Log.touchBar)
+        Log.info("【P0·可观察量】注册线程=\(Thread.isMainThread ? "main" : "⚠️ 非主线程")；" +
+                 "Control Strip 用户定制项=[\(Self.controlStripCustomizedItems())]",
+                 log: Log.touchBar)
+        Log.info("【P0·特权自省】本进程持有 com.apple.private.controlstrip：" +
+                 "\(EntitlementCheck.hasControlStripEntitlement ? "是" : "否")" +
+                 "（MTMR 同样为「否」，故它不能作为判据）", log: Log.touchBar)
+    }
+
+    /// 读取用户当前的 Control Strip 定制清单（`com.apple.controlstrip` → `MiniCustomized`）。
+    /// 这是目前**唯一**能从外部观测"托盘项有没有被服务端接受"的指标。
+    private static func controlStripCustomizedItems() -> String {
+        let value = CFPreferencesCopyAppValue("MiniCustomized" as CFString,
+                                              "com.apple.controlstrip" as CFString)
+        guard let array = value as? [String] else { return "读取失败或为空" }
+        return array.joined(separator: ", ")
+    }
+
+    /// 托盘按钮的**模板**图标。
+    ///
+    /// Control Strip 里的系统图标都是模板图（`isTemplate = true`：只有形状 + alpha，
+    /// 颜色由系统统一给），彩色位图在深/浅色主题下都会突兀，MTMR 用的也是自绘模板图。
+    ///
+    /// 🔴 为什么不能再拿 `NSApp.applicationIconImage`：本项目**没有 .icns 资源**
+    ///（`Resources/` 下只有 Info.plist 与 entitlements，Info.plist 里也没有 `CFBundleIconFile`），
+    /// 所以那只是系统占位图标，不是我们自己的图标。
+    /// 托盘按钮的**模板**图标 —— **这是 P0 真机上真正生效的修法**（详见 README 第 7 节）。
+    ///
+    /// 🔴 旧实现（不显示）：`NSButton(frame: 44×30)` + `bezelStyle = .rounded`
+    ///    + `NSApp.applicationIconImage`。本项目**没有 .icns 资源**，
+    ///    所以 `applicationIconImage` 拿到的是系统**占位**图标（且是彩色位图、非模板图）。
+    /// 🟢 现实现（A/B/C 三种签名配置下都实测可见）：与 MTMR 一致的写法 ——
+    ///    **模板图 + `NSButton(image:target:action:)` 便捷构造**，不指定 frame、不覆盖 bezelStyle。
+    ///
+    /// 模板图约定：`isTemplate = true`，只有形状 + alpha，颜色由系统统一给；
+    /// 彩色位图在深/浅色主题下都会突兀。
+    private static func makeTrayIcon() -> NSImage {
+        if #available(macOS 11.0, *) {
+            if let symbol = NSImage(systemSymbolName: "rectangle.on.rectangle",
+                                    accessibilityDescription: "btTool") {
+                symbol.isTemplate = true
+                return symbol
+            }
+        }
+        // 10.15 回退：自绘模板图（纯黑 + 透明）
+        let image = NSImage(size: NSSize(width: 26, height: 18))
+        image.lockFocus()
+        ("BT" as NSString).draw(in: NSRect(x: 0, y: 2, width: 26, height: 14),
+                                withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .bold),
+                                                 .foregroundColor: NSColor.black])
+        image.unlockFocus()
+        image.isTemplate = true
+        return image
+    }
+
+    /// 销毁托盘（关闭后台注入 / 进程退出时调用）。
+    ///
+    /// 顺序与注册严格相反：**先关 DFR 存在性，再 `removeSystemTrayItem:`**，
+    /// 否则 Server 那边会短暂残留一个已经没有 owner 的标识。
+    func removeTrayItem() {
+        guard let item = trayItem else { return }
+        trayItem = nil
+        DFRFoundationBridge.setControlStripPresence(identifier: Self.trayItemIdentifier, present: false)
+        if let selector = SystemModalTouchBarAPI.removeTrayItemSelector {
+            ObjCRuntime.sendVoid(NSTouchBarItem.self, selector, item)
+            Log.info("已从 Control Strip 移除托盘项（DFR 存在性已先置 NO）", log: Log.touchBar)
+        }
+    }
+
+    @objc private func trayItemClicked(_ sender: NSButton) {
+        Log.info("Control Strip 托盘被点击", log: Log.touchBar)
+        onTrayItemClicked?()
+    }
+
+    // MARK: - 系统收回侦测（只同步状态，不再自动重燃）
+
+    /// 监听 `isVisible`。用户点叉 / 被其它系统模态抢占时 `isVisible` 立刻变 false，
+    /// 我们只把“已展开”状态翻回 false，让下一次点托盘图标能重新展开。
+    private func observeVisibility(of touchBar: NSTouchBar) {
+        visibilityObservation?.invalidate()
+        visibilityObservation = touchBar.observe(\.isVisible, options: [.new]) { [weak self] _, change in
+            guard change.newValue == false else { return }
+            guard let self, self.host != nil else { return }
+            // KVO 回调跟随属性变更线程；NSTouchBar 的可见性由主线程更新，这里再兜一层。
+            // 内层必须再次 weak：observation 持有闭包，强引用 self 会形成环，deinit 永远不来。
+            DispatchQueue.main.async { [weak self] in
+                // 必须是"同一条" bar：若期间已经换过一条，旧 bar 的延迟回调不能误报
+                guard let self, self.host?.touchBar === touchBar, !touchBar.isVisible else { return }
+                Log.info("系统收回了展开的 Touch Bar（点叉 / 被抢占），只剩右侧托盘", log: Log.touchBar)
+                self.onSystemDismissed?()
+            }
         }
     }
 
@@ -215,7 +448,8 @@ final class SystemModalTouchBarPresenter: TouchBarPresenting {
 
         // 必须显式桥接成 NSString —— 私有 API 的参数编码是 '@'，传 Swift String 桥接后也是 '@'，
         // 但显式转换可以避免任何 autorelease 时机问题。
-        let identifier = Self.systemTrayItemIdentifier as NSString
+        // 与托盘项同一个 identifier：系统据此把“右侧图标”和“左侧长栏”绑成一对
+        let identifier = Self.trayItemIdentifier as NSString
         let cls: AnyClass = NSTouchBar.self
 
         if hasPlacement {
@@ -230,26 +464,4 @@ final class SystemModalTouchBarPresenter: TouchBarPresenting {
         return true
     }
 
-    /// 【实验性】尝试把入口项常驻到 Control Strip。
-    ///
-    /// `NSTouchBarItem` 上曾存在 `+addSystemTrayItem:` / `+removeSystemTrayItem:` 私有类方法。
-    /// 不同系统上行为差异很大（有的版本会直接把整条栏常驻，有的版本无效），
-    /// 因此默认关闭，由 `AppSettings.experimentalControlStripItem` 控制。
-    private func tryRegisterControlStripItem() {
-        let selector = NSSelectorFromString("addSystemTrayItem:")
-        guard ObjCRuntime.classMethodExists(on: NSTouchBarItem.self, selector) else {
-            Log.debug("addSystemTrayItem: 不存在，跳过 Control Strip 常驻实验", log: Log.touchBar)
-            return
-        }
-
-        let item = NSCustomTouchBarItem(identifier: NSTouchBarItem.Identifier(rawValue: Self.systemTrayItemIdentifier + ".tray"))
-        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 64, height: 30))
-        button.title = "BT"
-        button.bezelStyle = .rounded
-        button.bezelColor = .controlAccentColor
-        item.view = button
-
-        ObjCRuntime.sendVoid(NSTouchBarItem.self, selector, item)
-        Log.info("已尝试注册 Control Strip 常驻入口项（实验性）", log: Log.touchBar)
-    }
 }

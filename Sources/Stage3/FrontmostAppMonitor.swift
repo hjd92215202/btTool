@@ -97,9 +97,13 @@ final class FrontmostAppMonitor {
 
         if let info {
             Log.info("前台应用切换 → \(info.displayName)" +
-                     "（\(info.bundleIdentifier ?? "无 BundleID")）" +
-                     (info.focusedWindowTitle.map { " · 窗口：\($0)" } ?? ""),
+                     "（\(info.bundleIdentifier ?? "无 BundleID")）",
                      log: Log.workspace)
+            // 窗口标题是敏感内容（可能是文件名 / 邮件标题 / 网页标题，甚至带账号信息）：
+            // 文件里只留摘要，正文走 os_log 的 debug 级（默认不落盘）
+            if let title = info.focusedWindowTitle {
+                Log.sensitive("当前窗口标题", title, log: Log.workspace)
+            }
         } else {
             Log.info("无前台应用信息", log: Log.workspace)
         }

@@ -21,7 +21,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>10.15</string>
+	<string>11.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 btTool. All rights reserved.</string>
 	<!-- 纯代码工程：不要配置 NSMainNibFile / NSMainStoryboardFile，否则启动时会去找不存在的 nib -->
@@ -64,5 +64,18 @@
 	<false/>
 	<key>NSSupportsSuddenTermination</key>
 	<false/>
+
+	<!-- 🔴 关键点 4：后台常驻守护（第七阶段）
+	     守护引擎每 0.6s 检查 NSTouchBar.isVisible，用户点系统「×」把栏收走后立刻重注入。
+	     这里必须说清楚一件事：**不存在**能"豁免 DFR 校验 / 允许 Hook"的 Info.plist 开关。
+	     真正有效的只有下面这些（前三个已在上文配置）：
+	       ① LSMultipleInstancesProhibited=true —— 禁止多开，避免两条进程各注入一条栏、互抢焦点；
+	       ② NSSupportsAutomaticTermination / SuddenTermination=false —— 守护进程不能被系统"节能回收"；
+	       ③ 固定的 systemTrayItemIdentifier（代码里写死）—— 反复 present 不会在 Control Strip 堆积入口；
+	       ④ 指数退避（代码里实现）—— 连续被收回时最多退到 5s，避免高频重注入。
+	     另外：`disable-library-validation` **不是 Info.plist 键**，而是代码签名 entitlement
+	     （com.apple.security.cs.disable-library-validation），且只在开启 Hardened Runtime 时生效。
+	     本工程只 dlopen Apple 自带的 DFRFoundation（Apple 签名，库校验天然放行），默认无需它；
+	     仅当将来要加载第三方未签名 dylib 时，才用 Resources/btTool.entitlements 重签名。 -->
 </dict>
 </plist>

@@ -86,6 +86,13 @@ final class RuleItemEditorViewController: NSViewController, NSTextFieldDelegate 
         // 注：AppKit 没有 UIKit 的 loadViewIfNeeded()，访问 `view` 即同步触发加载。
         _ = view
 
+        // ⚠️ 切换编辑对象前，必须先把上一个对象的待提交改动**落盘**。
+        //    `scheduleCommit()` 延迟 0.25s 执行，而它执行时取的是**当下**的 itemID ——
+        //    在这 0.25s 里换掉编辑对象，旧按钮输入的文字就会被写到新按钮上。
+        //    这正是「新增按钮后一编辑，旧按钮的内容跑到新按钮上」的根因。
+        let isSameItem = (self.scope == scope) && (self.itemID == itemID)
+        if !isSameItem { flushPendingCommit() }
+
         self.scope = scope
         self.itemID = itemID
 
@@ -98,8 +105,10 @@ final class RuleItemEditorViewController: NSViewController, NSTextFieldDelegate 
 
         let dto = ActionDTO(model.action)
 
-        // 正在打字的控件不要回填（会把光标打断）
-        if !isEditing(titleField) { titleField.stringValue = model.title }
+        // 正在打字的控件不要回填（会把光标打断）—— 但这**只**适用于同一个按钮的刷新。
+        // 换了编辑对象就必须强制回填：否则文本框里留着上一个按钮的文字，
+        // 用户看到的就是「我点的是新按钮，怎么跳回旧按钮了」。
+        if !isSameItem || !isEditing(titleField) { titleField.stringValue = model.title }
 
         colorState = .untouched
         colorWell.color = model.bezelColor ?? .controlAccentColor
@@ -199,11 +208,24 @@ final class RuleItemEditorViewController: NSViewController, NSTextFieldDelegate 
 
     private func scheduleCommit() {
         pendingCommit?.cancel()
+        // 捕获此刻的编辑对象：即便将来因时序问题漏了 flush，
+        // 这个延迟闭包也不会把输入写到**别的**按钮上（双保险）。
+        let capturedItemID = itemID
         let work = DispatchWorkItem { [weak self] in
             self?.pendingCommit = nil
+            guard self?.itemID == capturedItemID else { return }
             self?.commit()
         }
         pendingCommit = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    /// 把排队中的改动**立即**提交到当前编辑对象，并取消那个延迟闭包。
+    /// 必须在切换编辑对象之前调用（见 `edit(scope:itemID:)`）。
+    private func flushPendingCommit() {
+        guard let work = pendingCommit else { return }
+        pendingCommit = nil
+        work.cancel()
+        commit()
     }
 }

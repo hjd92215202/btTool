@@ -1,0 +1,115 @@
+name: Release App
+
+# 打 tag 自动发布；也支持手动触发（打 tag 之前先验证 CI 能不能跑通）
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # ⚠️ 没有照搬 Tauri 那套 matrix，原因有三：
+    #   1. Windows / Linux 对本项目无意义 —— Touch Bar 是 macOS 独有的硬件；
+    #   2. Intel runner（macos-13）已下线，macos-latest 是 Apple Silicon；
+    #   3. 我们只要 x86_64（Touch Bar 只在 Intel Mac 上有，Apple Silicon 上
+    #      连 TouchBarServer 都不存在），所以是在 arm64 机器上**交叉编译** x86_64。
+    #
+    #   之所以"在没 Touch Bar 的机器上也能编译"：DFR 那套私有 API 是运行时
+    #   `dlopen` + `dlsym`，**不参与链接**（见 DFRFoundationBridge.swift）。
+    #
+    # ⚠️ CI 能保证的是：能编译、能过逻辑测试、能打包。
+    #   它**验证不了** Touch Bar 功能 —— runner 上没有这块硬件。真机验证还得本地做。
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          sw_vers -productVersion
+          uname -m
+          xcrun swift --version 2>&1 | head -2
+
+      # 交叉编译 x86_64 能不能过，这一步就能验出来（带 -target 的类型检查）
+      - name: 类型检查（x86_64 目标）
+        run: make typecheck
+
+      # 测试用本机架构跑（Makefile 里 test 不加 -target，免得还得装 Rosetta）
+      - name: 回归测试
+        run: make test
+
+      # ---------- 以下四步只在配了 Developer ID 证书时才跑 ----------
+      # 没配证书也能发 Release：产出的是 ad-hoc 签名的包（Signature=adhoc）。
+      # 别人下载后 Gatekeeper 会拦 —— 需要 `xattr -dr com.apple.quarantine btTool.app`
+      # 才能打开（"右键→打开"通常只对有 Developer ID 签名的 App 有效）。
+      # 本机自己构建则完全不受影响：本地产物没有隔离属性，双击直接开。
+      - name: 导入 Developer ID 证书
+        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        env:
+          CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo -n "$CERT_BASE64" | base64 --decode -o /tmp/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" /tmp/build.keychain
+          security default-keychain -s /tmp/build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" /tmp/build.keychain
+          security import /tmp/cert.p12 -k /tmp/build.keychain \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          # 不设 partition list 的话，codesign 会在 CI 上弹窗要求授权然后卡住
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" /tmp/build.keychain
+          security list-keychain -d user -s /tmp/build.keychain
+          rm -f /tmp/cert.p12
+
+      - name: 取出签名身份
+        id: identity
+        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        run: |
+          identity=$(security find-identity -v -p codesigning /tmp/build.keychain \
+            | grep "Developer ID Application" | head -1 \
+            | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$identity" ]; then
+            echo "::error::导入了证书，但没找到 Developer ID Application 身份"
+            exit 1
+          fi
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      - name: 建公证凭证
+        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        env:
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          APP_PASSWORD: ${{ secrets.NOTARY_APP_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials btTool \
+            --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
+
+      # Makefile 的 notarize 会在 staple 之后**自动重打 zip**（见其末尾），
+      # 所以这里不用再手动打包一次。
+      - name: 构建并公证
+        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        run: |
+          make clean
+          make notarize SIGN_IDENTITY="${{ steps.identity.outputs.identity }}"
+
+      # ---------- 没证书时的路径 ----------
+      - name: 构建（未公证）
+        if: ${{ secrets.DEVELOPER_ID_CERT == '' }}
+        run: |
+          make clean
+          make dist
+          make verify
+
+      - name: 发布 Release
+        # 手动触发时（分支上跑）没有 tag，跳过发布，只当 CI 自检用
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.zip
+          draft: true
+          generate_release_notes: true

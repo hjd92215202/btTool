@@ -46,8 +46,14 @@ final class HotKeyCenter {
                                          0,
                                          &reference)
         guard status == noErr, let reference else {
-            Log.error("注册全局热键 \(hotKey.readableDescription) 失败，status=\(status)" +
-                      "（若 status = -9878 表示该组合键已被系统/其它 App 占用）", log: Log.hotKey)
+            Log.error("注册全局热键 \(hotKey.readableDescription) 失败，status=\(status)",
+                      log: Log.hotKey)
+            if status == eventHotKeyExistsErr {
+                Log.error("   ↳ 该组合键已被系统或其它 App 占用（status = -9878）。" +
+                          "常见抢占者：⌘Space（聚焦搜索）、⌃Space（输入法切换）、⇧⌘3/4（截图）、" +
+                          "⌘Tab（应用切换）、⌃↑（Mission Control）、⌥⌘D（Dock）。" +
+                          "换一个组合即可", log: Log.hotKey)
+            }
             return nil
         }
 
