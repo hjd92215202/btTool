@@ -47,8 +47,19 @@ jobs:
       # 别人下载后 Gatekeeper 会拦 —— 需要 `xattr -dr com.apple.quarantine btTool.app`
       # 才能打开（"右键→打开"通常只对有 Developer ID 签名的 App 有效）。
       # 本机自己构建则完全不受影响：本地产物没有隔离属性，双击直接开。
+      - name: 检查是否配置签名凭证
+        id: signing
+        env:
+          DEVELOPER_ID_CERT: ${{ secrets.DEVELOPER_ID_CERT }}
+        run: |
+          if [ -n "$DEVELOPER_ID_CERT" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: 导入 Developer ID 证书
-        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
         env:
           CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT }}
           CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
@@ -68,11 +79,14 @@ jobs:
 
       - name: 取出签名身份
         id: identity
-        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
         run: |
+          # 输出形如：  1) ABCD1234 "Developer ID Application: Name (TEAMID)"
+          # 按双引号切分取第 2 段。用 awk 而不是 sed：块标量里 sed 的 \1 容易被
+          # 多转义一层（变成字面 \1），取出来的"身份"就是错的。
           identity=$(security find-identity -v -p codesigning /tmp/build.keychain \
             | grep "Developer ID Application" | head -1 \
-            | sed -E 's/.*"([^"]+)".*/\1/')
+            | awk -F'"' '{print $2}')
           if [ -z "$identity" ]; then
             echo "::error::导入了证书，但没找到 Developer ID Application 身份"
             exit 1
@@ -80,7 +94,7 @@ jobs:
           echo "identity=$identity" >> "$GITHUB_OUTPUT"
 
       - name: 建公证凭证
-        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
         env:
           APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
@@ -92,24 +106,33 @@ jobs:
       # Makefile 的 notarize 会在 staple 之后**自动重打 zip**（见其末尾），
       # 所以这里不用再手动打包一次。
       - name: 构建并公证
-        if: ${{ secrets.DEVELOPER_ID_CERT != '' }}
+        if: ${{ steps.signing.outputs.enabled == 'true' }}
         run: |
           make clean
           make notarize SIGN_IDENTITY="${{ steps.identity.outputs.identity }}"
 
       # ---------- 没证书时的路径 ----------
       - name: 构建（未公证）
-        if: ${{ secrets.DEVELOPER_ID_CERT == '' }}
+        if: ${{ steps.signing.outputs.enabled != 'true' }}
         run: |
           make clean
-          make dist
-          make verify
+          make dist dmg verify
 
-      - name: 发布 Release
+      - name: 发布已公证 ZIP
         # 手动触发时（分支上跑）没有 tag，跳过发布，只当 CI 自检用
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.signing.outputs.enabled == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: build/*.zip
+          draft: true
+          generate_release_notes: true
+
+      - name: 发布 ZIP 和 DMG（未公证）
+        if: startsWith(github.ref, 'refs/tags/') && steps.signing.outputs.enabled != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/*.zip
+            build/*.dmg
           draft: true
           generate_release_notes: true

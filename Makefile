@@ -7,6 +7,7 @@
 #   make test       # 跑回归测试
 #   make verify     # 自检构建产物（签名 / 最低系统 / 版本）
 #   make dist       # 打分发用 zip（公证只收 zip / dmg / pkg）
+#   make dmg        # 制作拖拽安装用 DMG
 #   make notarize   # 公证 + 装订（需要 Developer ID，见该 target 注释）
 #   make clean
 #
@@ -50,6 +51,7 @@ ARM_TARGET := arm64-apple-macosx$(DEPLOYMENT_TARGET)
 # 版本号从 Info.plist 读，避免多处写死后各说各话
 VERSION  := $(shell /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist 2>/dev/null || echo 1.0)
 DIST_ZIP := $(BUILD_DIR)/$(APP_NAME)-$(VERSION)-$(ARCH).zip
+DIST_DMG := $(BUILD_DIR)/$(APP_NAME)-$(VERSION)-$(ARCH).dmg
 
 # 🔏 签名身份：默认 ad-hoc（-）。要公证就得换成 Developer ID，见 notarize。
 SIGN_IDENTITY ?= -
@@ -71,7 +73,7 @@ else
 CODESIGN_OPTIONS =
 endif
 
-.PHONY: all typecheck build run test verify dist notarize notary-profile clean
+.PHONY: all typecheck build run test verify dist dmg notarize notary-profile clean
 
 all: build
 
@@ -137,6 +139,17 @@ dist: build
 	@ditto -c -k --keepParent $(APP_DIR) $(DIST_ZIP)
 	@echo "    $(DIST_ZIP)"
 	@du -h $(DIST_ZIP) | cut -f1 | sed 's/^/    体积：/'
+
+# 📀 DMG 安装镜像：打开后把 App 拖到“应用程序”即可
+dmg: build
+	@echo "==> 制作 DMG 安装镜像"
+	@staging=$$(mktemp -d); \
+	  trap 'rm -rf "$$staging"' EXIT; \
+	  ditto "$(APP_DIR)" "$$staging/$(APP_NAME).app"; \
+	  ln -s /Applications "$$staging/Applications"; \
+	  hdiutil create -volname "$(APP_NAME)" -srcfolder "$$staging" \
+	    -ov -format UDZO "$(DIST_DMG)"
+	@echo "    $(DIST_DMG)"
 
 # 🔐 公证 + 装订
 #

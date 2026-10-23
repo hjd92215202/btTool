@@ -1165,6 +1165,7 @@ make test       # 回归测试（62 项断言）
 make run        # 构建后打开
 make verify     # 产物自检：签名 / Bundle ID / 最低系统 / 版本
 make dist       # 打分发用 zip（公证只收 zip / dmg / pkg）
+make dmg        # 制作拖拽安装用 DMG
 make notarize   # 公证 + 装订（需要 Developer ID，见下）
 ```
 
@@ -1269,7 +1270,8 @@ Intel runner（`macos-13`）已下线，只能走交叉编译这条路。
 base64 -i DeveloperID.p12 | pbcopy     # 结果粘进 DEVELOPER_ID_CERT
 ```
 
-没配证书时产出的包**能下载**，但别人的 Gatekeeper 会拦 —— 细节见下面一节。
+没配证书时会额外产出 `btTool-版本-x86_64.dmg`，打开后可把 App 拖到“应用程序”。
+下载的 App 仍会被 Gatekeeper 拦截；首次启动前需要移除隔离属性，细节见下面一节。
 
 ### Gatekeeper 与 ad-hoc 签名（没有开发者账号时会遇到什么）
 
@@ -1299,8 +1301,10 @@ App 有效 —— 系统认得出"是谁签的"，才会给「仍要打开」这
 确定有效的办法是移除隔离属性：
 
 ```bash
-xattr -dr com.apple.quarantine btTool.app
+xattr -dr com.apple.quarantine "/Applications/btTool.app"
 ```
+
+从 DMG 安装时，先打开磁盘映像并把 `btTool.app` 拖到“应用程序”，再在终端执行上面的命令。
 
 要彻底消除这件事只有两条路：加入 Apple 开发者计划（$99/年，才能公证），或者只在本机用。
 
