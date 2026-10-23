@@ -604,8 +604,7 @@ final class AppCoordinator {
 
     /// 用户点击菜单栏「辅助功能权限：未授权 ⚠️」→ **此时才允许**弹一次系统授权窗。
     ///
-    /// 两步走：先（可能）弹窗；若仍未授权，再打开系统设置页让手动勾选 ——
-    /// 因为一旦 TCC 记过 `.denied`，系统就不会再弹第二次，只能手勾。
+    /// 只请求系统授权提示；由用户在系统提示中确认是否打开设置，避免抢先跳转。
     private func requestAccessibilityFromUserGesture() {
         if AccessibilityPermission.checkOrPrompt(reason: "菜单栏点击") {
             Log.info("已获得辅助功能权限")
@@ -613,7 +612,6 @@ final class AppCoordinator {
             frontmostAppMonitor.refreshNow()
             return
         }
-        Log.info("尚未授权 → 打开「系统设置 → 隐私与安全性 → 辅助功能」，请手动勾选 btTool")
-        AccessibilityPermission.revealInSystemSettings()
+        Log.info("尚未授权；等待用户通过系统授权提示处理")
     }
 }
