@@ -73,7 +73,7 @@ else
 CODESIGN_OPTIONS =
 endif
 
-.PHONY: all typecheck build run test verify dist dmg notarize notary-profile clean
+.PHONY: all typecheck build run test verify dist dmg notarize notary-profile icon clean
 
 all: build
 
@@ -102,6 +102,7 @@ endif
 	     -e 's/$$(PRODUCT_BUNDLE_IDENTIFIER)/com.bttool.app/' \
 	     -e 's/$$(PRODUCT_NAME)/$(APP_NAME)/' \
 	     Resources/Info.plist > $(CONTENTS)/Info.plist
+	@cp Resources/AppIcon.icns $(CONTENTS)/Resources/AppIcon.icns
 	@echo "    → 签名身份：$(SIGN_IDENTITY)"
 	@codesign --force $(CODESIGN_OPTIONS) --sign "$(SIGN_IDENTITY)" --timestamp=none \
 	          $(APP_DIR) 2>/dev/null \
@@ -150,6 +151,18 @@ dmg: build
 	  hdiutil create -volname "$(APP_NAME)" -srcfolder "$$staging" \
 	    -ov -format UDZO "$(DIST_DMG)"
 	@echo "    $(DIST_DMG)"
+
+# 🎨 生成应用图标
+#
+#    为什么不用 AI 生成的图：图像生成模型会在输出图右下角**打水印**（不能当图标用），
+#    而且渐变/噪点让 PNG 压不动（1.6M）。这里改为 CoreGraphics 程序化绘制纯色块：
+#    无水印、体积降到几十 KB，改配色只需编辑 Scripts/MakeIcon.swift 再跑一次。
+icon:
+	@echo "==> 生成应用图标"
+	@mkdir -p $(BUILD_DIR)
+	xcrun swiftc -O -sdk $(SDK) -framework CoreGraphics -framework ImageIO \
+		Scripts/MakeIcon.swift -o $(BUILD_DIR)/make-icon
+	@$(BUILD_DIR)/make-icon
 
 # 🔐 公证 + 装订
 #
