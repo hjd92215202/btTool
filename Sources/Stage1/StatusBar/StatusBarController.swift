@@ -72,7 +72,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     ///
     /// 被下线的研发探针：
     /// - 「显示 Touch Bar 宿主窗口…」：第二阶段调试用；宿主窗口现在只在「Dock 图标重新激活」时出现；
-    /// - 「全局快捷键：⌥Space（测试：唤起计算器）」：置灰的静态提示，改由配置文件里的「快捷键」标签页驱动；
+    /// - 「全局快捷键：⌥Space（测试：唤起计算器）」：置灰的静态提示，已随全局快捷键功能一并下线；
     /// - 「当前前台应用：—」：实时性没意义，排障时看 `~/Library/Logs/btTool/btTool.log` 更准。
     private func buildMenu() {
         let menu = NSMenu()

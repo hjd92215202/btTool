@@ -1,21 +1,21 @@
 import AppKit
 
-/// 右栏：头部（图标 + 名称 + 说明） + `NSTabView` 双标签页。
+/// 右栏：头部（图标 + 名称 + 说明） + 触控栏按钮列表编辑器。
 ///
 /// ```
 /// ┌─────────────────────────────────────────────────────────────┐
 /// │ 🧭 Safari浏览器                                              │
 /// │    com.apple.Safari                                          │
 /// ├─────────────────────────────────────────────────────────────┤
-/// │  ┌─ 触控栏 ─┐┌─ 快捷键 ─┐                                    │
-/// │  └───────────────────────────────────────────┘              │
-/// │   （Tab1）按钮列表 + 编辑器                                  │
-/// │   （Tab2）快捷键列表 + 编辑器                                │
+/// │   按钮列表 + 编辑器                                          │
+/// │                                                             │
 /// └─────────────────────────────────────────────────────────────┘
 /// ```
 ///
-/// 为什么用 `NSTabView`：把「触控栏」和「键盘快捷键」两个独立的编辑流程隔开，
-/// 避免它们在同一块区域里互相挤占垂直空间（这正是之前底部控件重叠的诱因之一）。
+/// 这里原本是 `NSTabView` 双标签（「触控栏」+「键盘快捷键」）—— 当初是为了把
+/// 两个独立的编辑流程隔开，避免它们互相挤占垂直空间。
+/// **全局快捷键功能删除后只剩一个页面**，标签栏就失去意义了（只剩一个标签还
+/// 白占一行），所以改成把列表直接铺满剩余区域。
 final class RuleDetailViewController: NSViewController {
     private var scope: RuleScope?
 
@@ -24,7 +24,6 @@ final class RuleDetailViewController: NSViewController {
     private let detailLabel = NSTextField(labelWithString: "")
 
     private let touchBarViewController = TouchBarItemsViewController()
-    private let shortcutsViewController = ShortcutsViewController()
 
     // MARK: - 生命周期
 
@@ -44,7 +43,6 @@ final class RuleDetailViewController: NSViewController {
         self.scope = scope
         reloadHeader()
         touchBarViewController.showScope(scope)
-        shortcutsViewController.showScope(scope)
     }
 
     // MARK: - UI
@@ -69,21 +67,10 @@ final class RuleDetailViewController: NSViewController {
         header.alignment = .centerY
         header.spacing = Metrics.labelGap
 
-        let tabView = NSTabView()
-        tabView.tabViewType = .topTabsBezelBorder
-        tabView.translatesAutoresizingMaskIntoConstraints = false
+        addChild(touchBarViewController)
+        let listView = touchBarViewController.view
 
-        let touchBarItem = NSTabViewItem(identifier: "touchBarTab")
-        touchBarItem.label = "触控栏"
-        touchBarItem.viewController = touchBarViewController
-        tabView.addTabViewItem(touchBarItem)
-
-        let shortcutsItem = NSTabViewItem(identifier: "shortcutsTab")
-        shortcutsItem.label = "键盘快捷键"
-        shortcutsItem.viewController = shortcutsViewController
-        tabView.addTabViewItem(shortcutsItem)
-
-        for subview in [header, tabView] {
+        for subview in [header, listView] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(subview)
         }
@@ -94,11 +81,11 @@ final class RuleDetailViewController: NSViewController {
             header.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Metrics.padding),
             header.heightAnchor.constraint(equalToConstant: 40),
 
-            tabView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Metrics.rowSpacing),
-            tabView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Metrics.padding),
-            tabView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Metrics.padding),
+            listView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Metrics.rowSpacing),
+            listView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Metrics.padding),
+            listView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -Metrics.padding),
             // 底部也留出 padding：拒绝视觉死角
-            tabView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -Metrics.padding),
+            listView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -Metrics.padding),
         ])
     }
 

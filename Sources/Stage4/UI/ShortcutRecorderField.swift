@@ -17,10 +17,6 @@ import Carbon.HIToolbox
 ///    并让 `becomeFirstResponder` 直接返回 true —— 一旦走 `super`，
 ///    NSTextField 会装 field editor，按键就被文本输入系统吃掉了。
 ///
-/// ## 与热键注册的配合
-/// 录制开始时广播 `didBeginRecording`，`AppCoordinator` 会临时注销所有 Carbon 热键：
-/// 否则用户按下的组合键会被系统热键先截胡，录制框根本收不到。
-/// 录制结束广播 `didEndRecording`，热键立刻恢复（新组合即时生效）。
 final class ShortcutRecorderField: NSTextField {
 
     /// 一次录制结果。`keyCode == nil` 表示「未设置」。
@@ -38,10 +34,6 @@ final class ShortcutRecorderField: NSTextField {
             return ModifierFlags.glyphs(cgRawValue: modifierRawValue) + KeyNames.name(for: keyCode)
         }
     }
-
-    /// 录制开始 / 结束（`object` 是控件本身）
-    static let didBeginRecording = Notification.Name("btTool.shortcutRecorder.didBeginRecording")
-    static let didEndRecording = Notification.Name("btTool.shortcutRecorder.didEndRecording")
 
     /// 捕获到有效组合时回调（**只**在用户真实按键时触发，`configure` 不会触发）
     var onCapture: ((Combo) -> Void)?
@@ -103,19 +95,14 @@ final class ShortcutRecorderField: NSTextField {
         updateBorder()
         // 已有值时仍然显示，方便用户对照着重录
         stringValue = combo.readableDescription
-        NotificationCenter.default.post(name: Self.didBeginRecording, object: self)
         return true
     }
 
     override func resignFirstResponder() -> Bool {
-        let wasRecording = isRecording
         isRecording = false
         updateBorder()
         placeholderString = "点击录制"
         refreshDisplay()
-        if wasRecording {
-            NotificationCenter.default.post(name: Self.didEndRecording, object: self)
-        }
         return super.resignFirstResponder()
     }
 
@@ -195,7 +182,6 @@ final class ShortcutRecorderField: NSTextField {
             updateBorder()
             placeholderString = "点击录制"
             refreshDisplay()
-            NotificationCenter.default.post(name: Self.didEndRecording, object: self)
         }
     }
 

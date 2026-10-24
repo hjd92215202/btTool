@@ -3,7 +3,7 @@ import AppKit
 /// Touch Bar 定义目录：所有「长什么样、点下去干什么」都集中在这里。
 ///
 /// 后续要做成可配置化（JSON / 可视化编辑器），只需要把这里改成「从磁盘加载 → 产出 TouchBarDefinition」，
-/// 其余所有模块（呈现器、规则引擎、快捷键）一行都不用改。
+/// 其余所有模块（呈现器、规则引擎）一行都不用改。
 enum TouchBarCatalog {
     // MARK: 第二阶段：本应用处于前台时展示的示例 Touch Bar
 

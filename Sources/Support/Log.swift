@@ -28,7 +28,6 @@ enum Log {
     static let subsystem = "com.bttool.app"
 
     static let general   = LogChannel(osLog: OSLog(subsystem: subsystem, category: "general"),   name: "general")
-    static let hotKey    = LogChannel(osLog: OSLog(subsystem: subsystem, category: "hotkey"),    name: "hotkey")
     static let touchBar  = LogChannel(osLog: OSLog(subsystem: subsystem, category: "touchbar"),  name: "touchbar")
     static let workspace = LogChannel(osLog: OSLog(subsystem: subsystem, category: "workspace"), name: "workspace")
 

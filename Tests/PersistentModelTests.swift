@@ -28,20 +28,5 @@ enum PersistentModelTests {
         t.checkEqual(minimal?.text, "仅标题", "解码后 text 应保留")
         t.check(minimal?.detail == nil, "缺失的 detail 应为 nil")
         t.check(minimal?.children == nil, "缺失的 children 应为 nil")
-
-        // KeyboardShortcutDTO → Carbon 修饰键映射 + 可读描述
-        let shortcut = KeyboardShortcutDTO(
-            id: "test-id",
-            keyCode: CGKeyCode(kVK_Space),
-            modifierRawValue: CGEventFlags.maskControl.rawValue
-                | CGEventFlags.maskAlternate.rawValue,
-            action: ActionDTO(kind: .log, text: "x"))
-        t.checkEqual(shortcut.carbonModifiers,
-                     UInt32(controlKey | optionKey),
-                     "⌃⌥ 应映射为 controlKey|optionKey")
-        t.check(shortcut.readableDescription.contains("Space"),
-                "readableDescription 应包含键名（实际：\(shortcut.readableDescription)）")
-        t.check(shortcut.readableDescription.contains("⌃⌥"),
-                "readableDescription 应包含修饰键字形（实际：\(shortcut.readableDescription)）")
     }
 }

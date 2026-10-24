@@ -45,6 +45,10 @@ final class TouchBarItemsViewController: NSViewController, NSTableViewDataSource
 
     func showScope(_ scope: RuleScope?) {
         _ = view     // 子控制器视图懒加载：先确保 buildUI 跑过，再刷新数据
+        // ⚠️ 同一个作用域的重复调用必须直接返回 —— 每次落盘都会走一轮
+        //    「store 通知 → 左栏 → showScope」，若在这里把选中清空并重刷，
+        //    用户正编辑的按钮就会被换掉（表现为「保存后跳到第一个按钮」）。
+        if let scope, self.scope?.id == scope.id { return }
         self.scope = scope
         selectedItemID = nil
         // ⚠️ 不要在这里追加 `editorViewController.edit(scope:itemID:nil)`：
@@ -147,6 +151,10 @@ final class TouchBarItemsViewController: NSViewController, NSTableViewDataSource
 
     @objc private func addItem(_ sender: Any) {
         guard let scope else { return }
+        // ⚠️ 先把编辑器里没落盘的改动结清。`RuleStore.addItem` 会同步抛 store 通知，
+        //    `reloadItems` 里可能先把编辑对象切到某个旧按钮，随后才切到新按钮 ——
+        //    这段交错里如果挂着上一次输入的延迟提交，就会张冠李戴地写到旧按钮上。
+        editorViewController.flush()
         RuleStore.shared.addItem(to: scope, title: "新按钮")
         // 选中刚加的最后一项（store 的 add 会发通知触发 reload，这里补一次选中即可）
         if let last = RuleStore.shared.items(in: scope).last {
@@ -161,6 +169,8 @@ final class TouchBarItemsViewController: NSViewController, NSTableViewDataSource
 
     @objc private func removeItem(_ sender: Any) {
         guard let scope, let selectedItemID else { return }
+        // 同上：删除也要先结清，否则待提交的输入会落到「删完之后被选中的那一个」上
+        editorViewController.flush()
         RuleStore.shared.removeItem(from: scope, itemID: selectedItemID)
         self.selectedItemID = nil
     }

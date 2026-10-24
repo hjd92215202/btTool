@@ -10,10 +10,9 @@ import AppKit
 ///    符合 Apple 的生命周期建议，也便于后续做懒加载/异步。
 /// 3. 与「前台 / 后台 / 系统模态」完全解耦，两种呈现方式复用同一个类。
 final class TouchBarHost: NSObject, NSTouchBarDelegate {
-    /// 单个按钮在长栏里的最小宽度。
-    /// 低于 130pt 时 `.rounded` 按钮会被系统压成“胶囊”，标题被截成省略号；
-    /// 132pt 刚好放得下 4 个中文字符 + 左右内边距，多个按钮自左向右平铺也不会挤在一起。
-    private static let itemMinimumWidth: CGFloat = 132
+    /// ⚠️ 这里原来有一个 132pt 的**最小宽度**约束，副作用是「终端」这种短标题按钮
+    ///    也被撑得和其它按钮一样宽。现在默认改为**宽度跟随标题文字**：
+    ///    不给 NSButton 加任何宽度约束，由它自己的 intrinsic content size 决定。
 
     let definition: TouchBarDefinition
     let touchBar: NSTouchBar
@@ -24,9 +23,12 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
 
         let bar = NSTouchBar()
         bar.customizationIdentifier = definition.customizationIdentifier
-        bar.defaultItemIdentifiers = definition.items.map { $0.identifier }
-        bar.customizationAllowedItemIdentifiers = bar.defaultItemIdentifiers
-        bar.principalItemIdentifier = definition.items.first?.identifier
+        let ids = definition.items.map { $0.identifier }
+        // ⚠️ 以前这里设了 principalItemIdentifier = 第一个 item，效果是**把整排按钮钉在正中**。
+        //    末尾补一个 flexible space 把右侧剩余空间吃掉，按钮就自左向右排了
+        //    （要居中就别加这个，要贴右边就放到数组开头）。
+        bar.defaultItemIdentifiers = ids + [.flexibleSpace]
+        bar.customizationAllowedItemIdentifiers = ids
         self.touchBar = bar
 
         super.init()
@@ -54,19 +56,17 @@ final class TouchBarHost: NSObject, NSTouchBarDelegate {
         let item = NSCustomTouchBarItem(identifier: model.identifier)
         item.customizationLabel = model.title
 
-        let button = NSButton(frame: NSRect(x: 0, y: 0, width: itemMinimumWidth, height: 30))
-        button.title = model.title
+        let button = NSButton(title: model.title, target: target,
+                              action: #selector(TouchBarHost.itemClicked(_:)))
         button.bezelStyle = .rounded
         button.font = NSFont.systemFont(ofSize: 13, weight: .regular)
         button.lineBreakMode = .byTruncatingTail
-        button.target = target
-        button.action = #selector(TouchBarHost.itemClicked(_:))
         // 用 tag 把按钮映射回对应的 model（简单、无关联对象、无内存问题）
         button.tag = index
-        // 显式给下限：NSTouchBar 按 item.view 的 fitting size 平铺，
-        // 只写 frame 会被 AppKit 的 intrinsic 尺寸覆盖回去
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: Self.itemMinimumWidth).isActive = true
+        // 宽度**不设任何约束** —— 取 NSButton 自己的 intrinsic content size，
+        // 也就是「跟标题文字一样宽」。短标题不会被撑成和其它按钮一样宽，
+        // 长标题也能完整显示（真放不下才按上面的 lineBreakMode 截断）。
         if let color = model.bezelColor {
             button.bezelColor = color
         }

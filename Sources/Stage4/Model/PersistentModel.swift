@@ -239,58 +239,6 @@ enum RuleScope: Equatable, Hashable {
     }
 }
 
-// MARK: - 键盘快捷键 DTO
-
-/// 「物理快捷键 → 动作」的可序列化描述。
-///
-/// 和 `ActionDTO` 一样：`KeyboardShortcutDTO` 是**磁盘契约**，
-/// 运行时才转成 `AppAction` / `HotKey`（Carbon 注册所需的类型无法 Codable）。
-struct KeyboardShortcutDTO: Codable, Equatable {
-    var id: String
-    /// 虚拟键码（与 `KeyCatalog` 同源）
-    var keyCode: UInt16
-    /// 修饰键：`CGEventFlags.rawValue`（与 ActionDTO.syntheticKey 保持同一种位定义）
-    var modifierRawValue: UInt64
-    var action: ActionDTO
-
-    init(id: String = UUID().uuidString,
-         keyCode: UInt16,
-         modifierRawValue: UInt64,
-         action: ActionDTO) {
-        self.id = id
-        self.keyCode = keyCode
-        self.modifierRawValue = modifierRawValue
-        self.action = action
-    }
-
-    // MARK: 运行时视图
-
-    /// Carbon 注册所需的修饰键掩码（转换规则见 `ModifierFlags`）
-    var carbonModifiers: UInt32 { ModifierFlags.carbon(from: modifierRawValue) }
-
-    var hotKey: HotKey { HotKey(keyCode: UInt32(keyCode), carbonModifiers: carbonModifiers) }
-
-    /// 形如 `⌃⌥A`
-    var readableDescription: String { hotKey.readableDescription }
-
-    var actionSummary: String { action.summary }
-
-    // MARK: 默认项
-
-    /// 新增快捷键时的默认组合：⌃⌥ + 某个未被占用的键
-    static func defaultShortcut(existing: [KeyboardShortcutDTO]) -> (keyCode: UInt16, modifierRawValue: UInt64) {
-        let controlOption = CGEventFlags.maskControl.rawValue | CGEventFlags.maskAlternate.rawValue
-        let used = Set(existing.map { "\($0.modifierRawValue)-\($0.keyCode)" })
-        let preferred: [UInt16] = [UInt16(kVK_ANSI_A), UInt16(kVK_ANSI_S), UInt16(kVK_ANSI_D),
-                                   UInt16(kVK_ANSI_F), UInt16(kVK_ANSI_G), UInt16(kVK_Space),
-                                   UInt16(kVK_ANSI_T), UInt16(kVK_ANSI_R)]
-        for key in preferred where !used.contains("\(controlOption)-\(key)") {
-            return (key, controlOption)
-        }
-        return (UInt16(kVK_Space), controlOption)
-    }
-}
-
 // MARK: - Item / Definition / Rule DTO
 
 struct TouchBarItemDTO: Codable {
@@ -331,8 +279,6 @@ struct TouchBarDefinitionDTO: Codable {
 struct TouchBarRuleDTO: Codable {
     var bundleIdentifiers: [String]
     var definition: TouchBarDefinitionDTO
-    /// 仅在该应用处于前台时生效的键盘快捷键（v2 新增；v1 存档缺失时按 [] 迁移）
-    var shortcuts: [KeyboardShortcutDTO] = []
 
     init(rule: TouchBarRule) {
         // 🟢 P2：Set 的遍历顺序取决于内部哈希布局，直接 Array(...) 会让每次保存
@@ -340,31 +286,21 @@ struct TouchBarRuleDTO: Codable {
         // （保持 Set 用于匹配是 O(1)，没必要为了排序把类型改成数组）
         bundleIdentifiers = rule.bundleIdentifiers.sorted()
         definition = TouchBarDefinitionDTO(definition: rule.definition)
-        shortcuts = rule.shortcuts
     }
 
     var model: TouchBarRule {
         TouchBarRule(bundleIdentifiers: Set(bundleIdentifiers),
-                     definition: definition.model,
-                     shortcuts: shortcuts)
+                     definition: definition.model)
     }
 
-    // MARK: 前向兼容（v1 → v2）
-
-    /// v1 存档里没有 `shortcuts` 字段。Swift 合成的 decoder 遇到缺 key 会直接 throw，
-    /// 导致整个解码失败 → 用户配置被回滚成默认值。这里主动兜住。
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        bundleIdentifiers = try container.decode([String].self, forKey: .bundleIdentifiers)
-        definition = try container.decode(TouchBarDefinitionDTO.self, forKey: .definition)
-        shortcuts = try container.decodeIfPresent([KeyboardShortcutDTO].self, forKey: .shortcuts) ?? []
-    }
 }
 
 /// 磁盘上的完整快照
 struct RuleStoreSnapshot: Codable {
     /// v1：只有 rules + generic
     /// v2：新增每个规则的 `shortcuts` 与全局的 `globalShortcuts`
+    ///     ⚠️ 这两个字段已随**全局快捷键**功能删除。读旧存档时多余的 key 会被忽略，
+    ///        版本号仍保持 2 —— 改版本号会牵动迁移逻辑，没必要。
     static let currentVersion = 2
     /// 仍可读取的最低版本（我们在 decode 层做了前向兼容，所以老版本也能读）
     static let minimumReadableVersion = 1
@@ -373,8 +309,6 @@ struct RuleStoreSnapshot: Codable {
     var rules: [TouchBarRuleDTO]
     /// 兜底（通用）Touch Bar，未命中任何规则时使用
     var generic: TouchBarDefinitionDTO?
-    /// 「全局（所有应用）」作用域下的快捷键（v2 新增）
-    var globalShortcuts: [KeyboardShortcutDTO]?
 
     var jsonData: Data? {
         let encoder = JSONEncoder()

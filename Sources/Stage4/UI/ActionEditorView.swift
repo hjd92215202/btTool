@@ -29,13 +29,19 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     /// 模拟按键的录制框（替代原来的按键下拉框 + 4 个修饰键复选框）
     private let shortcutRecorder = ShortcutRecorderField()
 
+    /// 「启动应用」的应用下拉框
+    private let appPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    /// 下拉框第 n 项 ↔ `installedApps[n]`（`indexOfSelectedItem` 要据此换回 Bundle ID）
+    private var installedApps: [AppDescriptor] = []
+
     private let kindRow: FormRow
+    private let appRow: FormRow
     private let mainRow: FormRow
     private let detailRow: FormRow
     private let keyRow: FormRow
     private let scriptRow: FormRow
 
-    private var orderedRows: [FormRow] { [kindRow, mainRow, detailRow, scriptRow, keyRow] }
+    private var orderedRows: [FormRow] { [kindRow, mainRow, appRow, detailRow, scriptRow, keyRow] }
 
     private let formLayout = VerticalFormLayout()
     private var pendingFlush: DispatchWorkItem?
@@ -55,6 +61,7 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
         kindRow = FormRow(labelText: "触发动作", control: kindPopup)
         mainRow = FormRow(labelText: "参数", control: mainField)
+        appRow = FormRow(labelText: "启动应用", control: appPopup)
         detailRow = FormRow(labelText: "附加", control: detailField)
         keyRow = FormRow(labelText: "按键组合", control: shortcutRecorder)
         scriptRow = FormRow(labelText: "脚本", control: scriptScrollView,
@@ -74,6 +81,9 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         kindPopup.addItems(withTitles: ActionDTO.Kind.allCases.map(\.displayName))
         kindPopup.target = self
         kindPopup.action = #selector(kindDidChange(_:))
+
+        appPopup.target = self
+        appPopup.action = #selector(appDidChange(_:))
 
         // 模拟按键允许无修饰键（例如只投递一个 F5），由录制器自行决定
         shortcutRecorder.requiresModifier = false
@@ -116,6 +126,8 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         mainField.stringValue = dto.text ?? ""
         detailField.stringValue = dto.detail ?? ""
         scriptTextView.string = dto.text ?? ""
+        // 「启动应用」交给下拉框 —— 手填 Bundle ID 不仅容易拼错，还看不出那个应用装没装
+        if dto.kind == .launch { rebuildAppPopup(selecting: dto.text ?? "") }
         // nil 表示「还没录过」，此时显示占位文案而不是伪造一个 Space
         shortcutRecorder.configure(keyCode: dto.keyCode,
                                    modifierRawValue: dto.modifierRawValue ?? 0)
@@ -150,6 +162,8 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
         kindRow.isHidden = false
         mainRow.isHidden = usesScriptEditor || kind == .group || kind == .openSettingsWindow
+                            || kind == .launch
+        appRow.isHidden = kind != .launch
         detailRow.isHidden = !(kind == .notification || kind == .launch)
         keyRow.isHidden = kind != .syntheticKey
         scriptRow.isHidden = !usesScriptEditor
@@ -160,7 +174,7 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             mainRow.label.stringValue = "通知标题"
             detailRow.label.stringValue = "通知内容"
         case .launch:
-            mainRow.label.stringValue = "Bundle ID"
+            appRow.label.stringValue = "启动应用"
             detailRow.label.stringValue = "应用名(可选)"
         case .openURL: mainRow.label.stringValue = "URL"
         case .shell: scriptRow.label.stringValue = "Shell 命令"
@@ -175,6 +189,41 @@ final class ActionEditorView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         formLayout.apply(rows: orderedRows, in: self)
         needsLayout = true
         superview?.needsLayout = true
+    }
+
+    // MARK: - 应用下拉框
+
+    /// 重建下拉框内容并选中指定的 Bundle ID。
+    /// 应用清单只在首次用到时取一次 —— LaunchServices 枚举有开销，没必要每次回填都跑。
+    private func rebuildAppPopup(selecting bundleID: String) {
+        if installedApps.isEmpty {
+            installedApps = AppDescriptor.installed()
+            appPopup.removeAllItems()
+            for app in installedApps {
+                appPopup.addItem(withTitle: "\(app.name)  —  \(app.bundleIdentifier)")
+            }
+        }
+        guard appPopup.numberOfItems > 0 else { return }
+
+        // 列表里**只有本机装了的应用**。记着一个已经卸载的应用没有意义 ——
+        // 它既启动不了，还会让人误以为那个选项是可用的。
+        // 当前 Bundle ID 不在列表里时（没装 / 还是空动作），下拉框保持未选中，
+        // 也不替用户改数据：等他重新挑一个再写入。
+        if let index = installedApps.firstIndex(where: { $0.bundleIdentifier == bundleID }) {
+            appPopup.selectItem(at: index)
+        } else {
+            appPopup.select(nil)
+        }
+    }
+
+    @objc private func appDidChange(_ sender: NSPopUpButton) {
+        guard installedApps.indices.contains(sender.indexOfSelectedItem) else { return }
+        let app = installedApps[sender.indexOfSelectedItem]
+        dto.text = app.bundleIdentifier
+        // 顺手把应用名填进「应用名(可选)」：目标没装时用它显示一个可读的名字
+        dto.detail = app.name
+        detailField.stringValue = app.name
+        commitNow()
     }
 
     // MARK: - Actions

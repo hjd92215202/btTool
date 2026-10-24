@@ -2,12 +2,10 @@ import AppKit
 import Carbon.HIToolbox
 import Foundation
 
-/// 一条规则：命中这些 Bundle ID → 展示这条 Touch Bar + 注册这些快捷键。
+/// 一条规则：命中这些 Bundle ID → 展示这条 Touch Bar。
 struct TouchBarRule {
     var bundleIdentifiers: Set<String>
     var definition: TouchBarDefinition
-    /// 仅当该应用处于前台时才注册的键盘快捷键（离开前台会被动态注销）
-    var shortcuts: [KeyboardShortcutDTO] = []
 
     /// GUI 里一条规则对应一个应用，取第一个作为主键
     var primaryBundleIdentifier: String {
@@ -31,26 +29,9 @@ struct TouchBarRule {
         let finder = TouchBarRule(bundleIdentifiers: ["com.apple.finder"],
                                   definition: TouchBarCatalog.finder)
 
-        // 给 Safari 播一颗「应用级快捷键」示例，方便用户理解这个 tab 的用法
-        var safariWithShortcut = safari
-        safariWithShortcut.shortcuts = [
-            KeyboardShortcutDTO(keyCode: UInt16(kVK_ANSI_T),
-                                modifierRawValue: CGEventFlags.maskControl.rawValue |
-                                                  CGEventFlags.maskAlternate.rawValue,
-                                action: ActionDTO(kind: .notification,
-                                                  text: "Safari 快捷键",
-                                                  detail: "⌃⌥T 只在 Safari 前台时生效")),
-        ]
-        return [safariWithShortcut, chrome, vscode, finder]
+        return [safari, chrome, vscode, finder]
     }()
 
-    /// 全局（All Apps）作用域下的示例快捷键：种子数据时写入；常驻全局生效
-    static let defaultGlobalShortcuts: [KeyboardShortcutDTO] = [
-        KeyboardShortcutDTO(keyCode: UInt16(kVK_ANSI_L),
-                            modifierRawValue: CGEventFlags.maskControl.rawValue |
-                                              CGEventFlags.maskAlternate.rawValue,
-                            action: ActionDTO(kind: .log, text: "⌃⌥L：这是「全局」作用域下的示例快捷键")),
-    ]
 }
 
 /// 规则引擎：Bundle ID → TouchBarDefinition。

@@ -91,7 +91,15 @@ final class RuleItemEditorViewController: NSViewController, NSTextFieldDelegate 
         //    在这 0.25s 里换掉编辑对象，旧按钮输入的文字就会被写到新按钮上。
         //    这正是「新增按钮后一编辑，旧按钮的内容跑到新按钮上」的根因。
         let isSameItem = (self.scope == scope) && (self.itemID == itemID)
-        if !isSameItem { flushPendingCommit() }
+        if !isSameItem {
+            if pendingCommit != nil {
+                // ⚠️ 排查「编辑 A 却改到 B」的关键线索：正常只会在用户连着操作时偶发，
+                //    一旦频繁出现，就说明有地方在悄悄切换编辑对象。
+                Log.info("⚠️ 切换编辑对象时尚有未提交的改动，先结清："
+                         + "…\(self.itemID?.suffix(6) ?? "nil") → …\(itemID?.suffix(6) ?? "nil")")
+            }
+            flushPendingCommit()
+        }
 
         self.scope = scope
         self.itemID = itemID
@@ -171,6 +179,7 @@ final class RuleItemEditorViewController: NSViewController, NSTextFieldDelegate 
         let title = titleField.stringValue
         let explicitColor = colorState
         let dto = actionEditor.dto
+        Log.debug("提交按钮改动 → …\(itemID.suffix(6))：「\(title)」")
 
         RuleStore.shared.updateItem(in: scope, itemID: itemID) { item in
             item.title = title.isEmpty ? "未命名" : title
@@ -211,14 +220,21 @@ final class RuleItemEditorViewController: NSViewController, NSTextFieldDelegate 
         // 捕获此刻的编辑对象：即便将来因时序问题漏了 flush，
         // 这个延迟闭包也不会把输入写到**别的**按钮上（双保险）。
         let capturedItemID = itemID
+        let capturedScope = scope
         let work = DispatchWorkItem { [weak self] in
             self?.pendingCommit = nil
-            guard self?.itemID == capturedItemID else { return }
+            // 同时校验 scope：换了应用也要作废 —— 否则会写到**另一个应用**下同名的按钮上
+            guard self?.itemID == capturedItemID, self?.scope == capturedScope else { return }
             self?.commit()
         }
         pendingCommit = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
     }
+
+    /// 把编辑器里尚未落盘的改动立即结清。
+    /// 列表控制器在**改动数据之前**调用它（新增 / 删除都会先同步触发 store 通知，
+    /// 那条链可能先把编辑对象切到别的按钮上）。
+    func flush() { flushPendingCommit() }
 
     /// 把排队中的改动**立即**提交到当前编辑对象，并取消那个延迟闭包。
     /// 必须在切换编辑对象之前调用（见 `edit(scope:itemID:)`）。

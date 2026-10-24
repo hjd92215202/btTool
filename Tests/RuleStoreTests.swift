@@ -52,8 +52,7 @@ enum RuleStoreTests {
         do {
             let future = RuleStoreSnapshot(version: RuleStoreSnapshot.currentVersion + 1,
                                            rules: [],
-                                           generic: nil,
-                                           globalShortcuts: nil)
+                                           generic: nil)
             try future.jsonData?.write(to: file)
             let before = try Data(contentsOf: file)
             let store = RuleStore(fileURL: file)
@@ -76,8 +75,6 @@ enum RuleStoreTests {
             let store = RuleStore(fileURL: file)
             t.check(!store.isReadOnlyMode, "v1 存档应可正常读取，不进只读模式")
             t.check(!store.rules.isEmpty, "v1 存档里的应用规则应被读出来")
-            t.checkEqual(store.globalShortcuts.count, 0,
-                         "v1 存档没有 globalShortcuts 字段，应迁移为空数组")
             if let data = try? Data(contentsOf: file),
                let snapshot = try? JSONDecoder().decode(RuleStoreSnapshot.self, from: data) {
                 t.checkEqual(snapshot.version,
@@ -114,8 +111,7 @@ enum RuleStoreTests {
                                                         "com.apple.Safari",
                                                         "com.apple.Mail"],
                                     definition: TouchBarDefinition(identifier: "btTool.touchBar.sort",
-                                                                   items: []),
-                                    shortcuts: [])
+                                                                   items: []))
             t.checkEqual(TouchBarRuleDTO(rule: rule).bundleIdentifiers,
                          ["com.apple.Mail", "com.apple.Safari", "com.apple.Terminal"],
                          "存档里的顺序应是确定的字典序")
@@ -124,7 +120,6 @@ enum RuleStoreTests {
 
     // MARK: - 测试用的存档构造
 
-    /// 手工构造一份 **v1** 存档：没有 `shortcuts` / `globalShortcuts` 字段。
     private static func makeV1Archive() -> Data {
         Data("""
         {
@@ -151,8 +146,7 @@ enum RuleStoreTests {
         let snapshot = RuleStoreSnapshot(
             version: RuleStoreSnapshot.currentVersion,
             rules: [TouchBarRuleDTO(rule: first)],
-            generic: TouchBarDefinitionDTO(definition: TouchBarCatalog.generic),
-            globalShortcuts: [])
+            generic: TouchBarDefinitionDTO(definition: TouchBarCatalog.generic))
         return snapshot.jsonData ?? Data()
     }
 }

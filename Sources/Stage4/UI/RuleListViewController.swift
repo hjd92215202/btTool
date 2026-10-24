@@ -26,6 +26,20 @@ final class RuleListViewController: NSViewController, NSTableViewDataSource, NST
         return entries[tableView.selectedRow].scopeID
     }
 
+    /// 上一次**真的**通知给右栏的作用域 id。
+    /// 存在的理由：每一次 `RuleStore` 落盘都会走 `reload()`，而它会重选中同一行 →
+    /// 连带回调 `onSelectScope` → 右栏 `showScope` 把自己的编辑对象清空跳回第一个按钮。
+    /// 所以通知前必须比对：作用域没变就不吭声。
+    private var lastNotifiedScopeID: String?
+
+    /// 作用域确实发生变化时才往下通知（或用户主动点了某一行）。
+    private func notifyScopeChangeIfNeeded() {
+        let current = selectedScopeID
+        guard current != lastNotifiedScopeID else { return }
+        lastNotifiedScopeID = current
+        onSelectScope?(current)
+    }
+
     // MARK: - 生命周期
 
     override func loadView() {
@@ -117,7 +131,9 @@ final class RuleListViewController: NSViewController, NSTableViewDataSource, NST
         if let targetIndex {
             tableView.selectRowIndexes(IndexSet(integer: targetIndex), byExtendingSelection: false)
         }
-        onSelectScope?(selectedScopeID)
+        // ⚠️ 这里曾经是无条件的 `onSelectScope?(selectedScopeID)`：
+        //    于是每保存一次就把右栏踢回第一个按钮（连着你正在编辑的那个也被换掉）。
+        notifyScopeChangeIfNeeded()
     }
 
     private static func globalIcon() -> NSImage {
@@ -171,7 +187,7 @@ final class RuleListViewController: NSViewController, NSTableViewDataSource, NST
         tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         tableView.scrollRowToVisible(index)
         view.window?.makeFirstResponder(tableView)
-        onSelectScope?(scopeID)
+        notifyScopeChangeIfNeeded()
     }
 
     @objc private func removeApplication(_ sender: Any) {
@@ -205,7 +221,9 @@ final class RuleListViewController: NSViewController, NSTableViewDataSource, NST
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        onSelectScope?(selectedScopeID)
+        // 注意：`reload()` 里的 `selectRowIndexes` 也会走到这里。
+        // 只有用户真的换了行，`selectedScopeID` 才会变 —— 交给比对去挡重复通知。
+        notifyScopeChangeIfNeeded()
     }
 }
 

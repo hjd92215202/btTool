@@ -115,7 +115,7 @@ enum CommandApproval {
         let alert = NSAlert()
         alert.messageText = "允许执行这段\(kind.displayName)吗？"
         alert.informativeText = """
-        这是我们第一次见到它 —— 来源是 Touch Bar 按钮 / 全局快捷键的规则配置，\
+        这是我们第一次见到它 —— 来源是 Touch Bar 按钮的规则配置，\
         或者是**被外部程序改动过的规则文件**。
 
         请确认下面这段内容是你自己写的、且你信任它：

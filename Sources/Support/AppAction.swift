@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 
 /// 声明式的动作模型。
 ///
-/// 这是整个架构里最重要的“接缝”：全局快捷键、前台 Touch Bar 按钮、后台注入的 Touch Bar 按钮，
+/// 这是整个架构里最重要的“接缝”：前台 Touch Bar 按钮、后台注入的 Touch Bar 按钮，
 /// 三者都只产出 `AppAction`，执行逻辑集中在一处，后续要加脚本执行 / HTTP / AppleScript 只需扩展一个 case。
 indirect enum AppAction {
     /// 打日志（最安全的测试动作）

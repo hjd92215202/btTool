@@ -57,8 +57,7 @@ enum SecurityTests {
         // 在 btTool 之外改写这个文件（模拟"别人替我改了配置"）
         let tampered = RuleStoreSnapshot(version: RuleStoreSnapshot.currentVersion,
                                          rules: [],
-                                         generic: nil,
-                                         globalShortcuts: nil)
+                                         generic: nil)
         try? tampered.jsonData?.write(to: file)
 
         let second = RuleStore(fileURL: file)

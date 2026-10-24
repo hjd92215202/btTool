@@ -15,6 +15,8 @@ print("  · 命令门禁与外部修改检测")
 SecurityTests.run(runner)
 print("  · 存档 DTO 编解码")
 PersistentModelTests.run(runner)
+print("  · 应用枚举（启动应用下拉框的数据源）")
+AppDescriptorTests.run(runner)
 
 if runner.isSuccess {
     print("✅ 全部通过（\(runner.passed) 项断言）")

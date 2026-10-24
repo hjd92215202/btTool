@@ -13,7 +13,8 @@ import Foundation
 /// 第六阶段的两个变化：
 /// 1. 数据入口统一为 `RuleScope`：「全局（All Apps）」与「某个具体应用」走同一套 API，
 ///    这样左右栏 UI 不必区分两种数据形态；
-/// 2. `version` 升到 2（新增 `shortcuts` / `globalShortcuts`），
+/// 2. `version` 升到 2（曾新增 `shortcuts` / `globalShortcuts`，这两个字段已随全局快捷键功能删除，
+///    版本号保留 2 —— 改版本号会牵动迁移逻辑），
 ///    并在 `TouchBarRuleDTO` 的自定义 decoder 里做前向兼容，保证 v1 存档**不会被回滚**。
 final class RuleStore {
     static let shared = RuleStore()
@@ -26,9 +27,6 @@ final class RuleStore {
 
     private(set) var rules: [TouchBarRule] = []
     private(set) var genericDefinition: TouchBarDefinition
-    /// 「全局（所有应用）」作用域下的快捷键 —— 常驻注册，不随前台应用切换而注销
-    private(set) var globalShortcuts: [KeyboardShortcutDTO] = []
-
     /// **只读模式**标志：规则文件读不出来 / 解析失败 / 版本不兼容时置 true。
     ///
     /// 该状态下 `save()` **一律不落盘**，改动只留在内存里，用户的原文件绝不会被覆盖。
@@ -126,11 +124,11 @@ final class RuleStore {
 
         rules = snapshot.rules.map(\.model)
         genericDefinition = snapshot.generic?.model ?? TouchBarCatalog.generic
-        // v1 存档没有这个 key → nil → []
-        globalShortcuts = snapshot.globalShortcuts ?? []
+        // 注：v2 存档里的 globalShortcuts / shortcuts 字段已随全局快捷键功能删除，
+        //     合成 decoder 会自动忽略这些多余 key，旧存档照样能读。
         let migrated = snapshot.version < RuleStoreSnapshot.currentVersion
-        Log.info("已从磁盘加载规则：\(fileURL.path)（\(rules.count) 条应用规则 · " +
-                 "\(globalShortcuts.count) 条全局快捷键\(migrated ? " · 已从 v\(snapshot.version) 迁移" : "")）")
+        Log.info("已从磁盘加载规则：\(fileURL.path)（\(rules.count) 条应用规则" +
+                 "\(migrated ? " · 已从 v\(snapshot.version) 迁移" : "")）")
         if snapshot.version == RuleStoreSnapshot.currentVersion { return }
         // 迁移：读完立刻按新版本写回，下次就不用再走兼容分支了
         Log.info("正在把存档从 v\(snapshot.version) 升级到 v\(RuleStoreSnapshot.currentVersion)")
@@ -141,7 +139,6 @@ final class RuleStore {
     func seedDefaults() {
         rules = TouchBarRule.defaults
         genericDefinition = TouchBarCatalog.generic
-        globalShortcuts = TouchBarRule.defaultGlobalShortcuts
         Log.info("首次运行，已写入默认规则")
         save()
     }
@@ -154,7 +151,6 @@ final class RuleStore {
         lastBackupURL = backupCurrentFile()
         rules = TouchBarRule.defaults
         genericDefinition = TouchBarCatalog.generic
-        globalShortcuts = TouchBarRule.defaultGlobalShortcuts
         Log.error("⚠️ \(reason)：已进入**只读模式**，本次运行不会写入任何规则，原文件不会被覆盖。")
         if let backup = lastBackupURL {
             Log.error("   原文件已备份到：\(backup.path)")
@@ -192,7 +188,6 @@ final class RuleStore {
         isReadOnlyMode = false
         rules = TouchBarRule.defaults
         genericDefinition = TouchBarCatalog.generic
-        globalShortcuts = TouchBarRule.defaultGlobalShortcuts
         Log.info("用户确认「用默认值重置」→ 退出只读模式并写入默认规则" +
                  (lastBackupURL.map { "（原备份保留在 \($0.path)）" } ?? ""))
         save()
@@ -272,8 +267,7 @@ final class RuleStore {
                                                     withIntermediateDirectories: true)
             let snapshot = RuleStoreSnapshot(version: RuleStoreSnapshot.currentVersion,
                                              rules: rules.map(TouchBarRuleDTO.init),
-                                             generic: TouchBarDefinitionDTO(definition: genericDefinition),
-                                             globalShortcuts: globalShortcuts)
+                                             generic: TouchBarDefinitionDTO(definition: genericDefinition))
             let data = snapshot.jsonData
             try data?.write(to: fileURL, options: .atomic)
             hardenFilePermissions()
@@ -370,64 +364,6 @@ final class RuleStore {
                       $0.identifier.rawValue == itemID
                   }) else { return }
             mutate(&rules[ruleIndex].definition.items[itemIndex])
-        }
-        save()
-    }
-
-    // MARK: - 键盘快捷键（按作用域）
-
-    func shortcuts(in scope: RuleScope) -> [KeyboardShortcutDTO] {
-        switch scope {
-        case .global: return globalShortcuts
-        case .app(let bundleIdentifier):
-            return rule(bundleIdentifier: bundleIdentifier)?.shortcuts ?? []
-        }
-    }
-
-    /// - Returns: 新快捷键的 id（便于 UI 选中它）
-    @discardableResult
-    func addShortcut(to scope: RuleScope) -> String? {
-        let existing = shortcuts(in: scope)
-        let combo = KeyboardShortcutDTO.defaultShortcut(existing: existing)
-        let shortcut = KeyboardShortcutDTO(keyCode: combo.keyCode,
-                                           modifierRawValue: combo.modifierRawValue,
-                                           action: ActionDTO(kind: .log, text: "快捷键已触发"))
-        switch scope {
-        case .global:
-            globalShortcuts.append(shortcut)
-        case .app(let bundleIdentifier):
-            guard let index = index(ofRule: bundleIdentifier) else { return nil }
-            rules[index].shortcuts.append(shortcut)
-        }
-        Log.info("新增快捷键：\(shortcut.readableDescription)（作用域：\(scope.displayName)）")
-        save()
-        return shortcut.id
-    }
-
-    func removeShortcut(from scope: RuleScope, shortcutID: String) {
-        switch scope {
-        case .global:
-            guard let index = globalShortcuts.firstIndex(where: { $0.id == shortcutID }) else { return }
-            globalShortcuts.remove(at: index)
-        case .app(let bundleIdentifier):
-            guard let ruleIndex = index(ofRule: bundleIdentifier),
-                  let index = rules[ruleIndex].shortcuts.firstIndex(where: { $0.id == shortcutID }) else { return }
-            rules[ruleIndex].shortcuts.remove(at: index)
-        }
-        save()
-    }
-
-    func updateShortcut(in scope: RuleScope,
-                        shortcutID: String,
-                        mutate: (inout KeyboardShortcutDTO) -> Void) {
-        switch scope {
-        case .global:
-            guard let index = globalShortcuts.firstIndex(where: { $0.id == shortcutID }) else { return }
-            mutate(&globalShortcuts[index])
-        case .app(let bundleIdentifier):
-            guard let ruleIndex = index(ofRule: bundleIdentifier),
-                  let index = rules[ruleIndex].shortcuts.firstIndex(where: { $0.id == shortcutID }) else { return }
-            mutate(&rules[ruleIndex].shortcuts[index])
         }
         save()
     }

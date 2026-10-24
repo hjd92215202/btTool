@@ -6,18 +6,12 @@ final class AppSettings {
     static let shared = AppSettings()
 
     private enum Key {
-        static let hotKeyEnabled = "btTool.hotKeyEnabled"
         static let backgroundTouchBarEnabled = "btTool.backgroundTouchBarEnabled"
         static let injectForAllApps = "btTool.injectForAllApps"
         static let trayItemDestroyOnDeactivate = "btTool.trayItemDestroyOnDeactivate"
     }
 
     private let defaults = UserDefaults.standard
-
-    /// 是否启用全局快捷键（第一阶段）
-    var hotKeyEnabled: Bool {
-        didSet { defaults.set(hotKeyEnabled, forKey: Key.hotKeyEnabled) }
-    }
 
     /// 是否在后台动态注入 Touch Bar（第三阶段总开关）
     var backgroundTouchBarEnabled: Bool {
@@ -41,12 +35,10 @@ final class AppSettings {
 
     private init() {
         defaults.register(defaults: [
-            Key.hotKeyEnabled: true,
             Key.backgroundTouchBarEnabled: true,
             Key.injectForAllApps: true,
             Key.trayItemDestroyOnDeactivate: false,
         ])
-        hotKeyEnabled = defaults.bool(forKey: Key.hotKeyEnabled)
         backgroundTouchBarEnabled = defaults.bool(forKey: Key.backgroundTouchBarEnabled)
         injectForAllApps = defaults.bool(forKey: Key.injectForAllApps)
         trayItemDestroyOnDeactivate = defaults.bool(forKey: Key.trayItemDestroyOnDeactivate)

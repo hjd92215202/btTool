@@ -33,49 +33,7 @@ final class IconTitleCellView: NSTableCellView {
         imageView?.image = icon
         textField?.stringValue = title
     }
-}
-
-/// 快捷键列表的单元格：上方大字号组合键 + 下方动作摘要
-final class ShortcutCellView: NSTableCellView {
-    private let subtitleLabel = NSTextField(labelWithString: "")
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-
-        let keyLabel = NSTextField(labelWithString: "")
-        keyLabel.translatesAutoresizingMaskIntoConstraints = false
-        keyLabel.font = NSFont.monospacedSystemFont(ofSize: 15, weight: .semibold)
-        keyLabel.lineBreakMode = .byTruncatingTail
-        addSubview(keyLabel)
-        textField = keyLabel
-
-        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        subtitleLabel.font = NSFont.systemFont(ofSize: 11)
-        subtitleLabel.textColor = .secondaryLabelColor
-        subtitleLabel.lineBreakMode = .byTruncatingTail
-        addSubview(subtitleLabel)
-
-        NSLayoutConstraint.activate([
-            keyLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            keyLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            keyLabel.topAnchor.constraint(equalTo: topAnchor, constant: 5),
-            subtitleLabel.leadingAnchor.constraint(equalTo: keyLabel.leadingAnchor),
-            subtitleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            subtitleLabel.topAnchor.constraint(equalTo: keyLabel.bottomAnchor, constant: 1),
-            subtitleLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -4),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) 未实现：纯代码布局") }
-
-    func configure(shortcut: KeyboardShortcutDTO, conflicted: Bool) {
-        textField?.stringValue = shortcut.readableDescription
-        textField?.textColor = conflicted ? .systemRed : .labelColor
-        subtitleLabel.stringValue = conflicted ? "⚠️ 与「全局」快捷键冲突，已被忽略" : shortcut.actionSummary
-    }
-}
-
-/// 右侧「按钮列表」的单元格：颜色小方块 + 标题 + 动作摘要
+}/// 右侧「按钮列表」的单元格：颜色小方块 + 标题 + 动作摘要
 final class ItemCellView: NSTableCellView {
     private let subtitleLabel = NSTextField(labelWithString: "")
 
